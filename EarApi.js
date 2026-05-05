@@ -60,6 +60,33 @@ function queryCustomsDeclarationDigest(params) {
     throw new Error('declarationDateFrom és declarationDateTo megadása kötelező');
   }
 
+  var msPerDay = 24 * 60 * 60 * 1000;
+  var fDate = new Date(params.declarationDateFrom + 'T00:00:00Z');
+  var tDate = new Date(params.declarationDateTo + 'T00:00:00Z');
+  var diffDays = (tDate.getTime() - fDate.getTime()) / msPerDay;
+
+  if (diffDays > 33) {
+    var allRowsChunked = [];
+    var currentFrom = new Date(fDate.getTime());
+    
+    while (currentFrom <= tDate) {
+      var currentTo = new Date(currentFrom.getTime() + 33 * msPerDay);
+      if (currentTo > tDate) {
+        currentTo = new Date(tDate.getTime());
+      }
+      
+      var chunkParams = JSON.parse(JSON.stringify(params));
+      chunkParams.declarationDateFrom = Utilities.formatDate(currentFrom, 'UTC', 'yyyy-MM-dd');
+      chunkParams.declarationDateTo   = Utilities.formatDate(currentTo, 'UTC', 'yyyy-MM-dd');
+      
+      var chunkRows = queryCustomsDeclarationDigest(chunkParams);
+      allRowsChunked = allRowsChunked.concat(chunkRows);
+      
+      currentFrom = new Date(currentTo.getTime() + 1 * msPerDay);
+    }
+    return allRowsChunked;
+  }
+
   var mandatory =
     '    <mandatoryDeclarationQueryParams>\n' +
     '      <declarationDateFrom>' + params.declarationDateFrom + '</declarationDateFrom>\n' +

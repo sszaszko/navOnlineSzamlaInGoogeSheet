@@ -265,7 +265,7 @@ function postProcessSheets() {
             const tetelHeaders = tetelSheet.getRange(1, 1, 1, tetelSheet.getLastColumn()).getValues()[0];
             const tetelSzamlaSorszamaCol = tetelHeaders.indexOf("Számla sorszáma") + 1; // <-- DUPLIKÁTUMHOZ
             const sorszamCol = tetelHeaders.indexOf("Tétel sorszáma") + 1; // <-- DUPLIKÁTUMHOZ
-            const kiallitasCol = tetelHeaders.indexOf("Kiállítás") + 1;
+            const kiallitasCol = tetelHeaders.indexOf("Számla kelte") + 1;
             const eladoNeveCol = tetelHeaders.indexOf("Eladó neve") + 1;
             const nettoCol = tetelHeaders.indexOf("Nettó összeg (forintban)") + 1;
             const bruttoCol = tetelHeaders.indexOf("Bruttó összeg (forintban)") + 1;
@@ -338,7 +338,7 @@ function postProcessSheets() {
                         column: sorszamCol,
                         ascending: true
                     }]);
-                    Logger.log(`"Tétel adatok" munkalap rendezve "Kiállítás", "Eladó neve", "Tétel sorszáma" szerint.`);
+                    Logger.log(`"Tétel adatok" munkalap rendezve "Számla kelte", "Eladó neve", "Tétel sorszáma" szerint.`);
                 } else {
                     Logger.log('"Tétel adatok" munkalap üres a duplikátum szűrés után.');
                 }

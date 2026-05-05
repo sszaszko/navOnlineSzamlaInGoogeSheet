@@ -244,6 +244,105 @@ function autoSyncLast5Days() {
 }
 
 // ============================================================
+// AUTOMATIKUS SZINKRONIZÁLÁS (NINCS UI) - VÁMHATÁROZATOK
+// ============================================================
+
+function autoSyncEarLast5Days() {
+  Logger.log('autoSyncEarLast5Days: INDULÁS - Utolsó 5 nap (mát is beleértve) eÁFA vámhatározatok letöltése és hiányzók pótlása...');
+
+  var today = new Date();
+  var from = new Date(today.getTime() - 4 * 24 * 3600 * 1000); // 4 nap kivonása = mai nap + 4 korábbi = 5 nap
+
+  var fmt = function (d) { return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd'); };
+
+  var dateFrom = fmt(from);
+  var dateTo = fmt(today);
+
+  Logger.log('Dátum sáv: ' + dateFrom + ' - ' + dateTo);
+
+  try {
+    // 1. Digest lekérdezés
+    var rows = queryCustomsDeclarationDigest({
+      declarationDateFrom: dateFrom,
+      declarationDateTo:   dateTo,
+      declarationDirection: 'IMPORTER'
+    });
+    var writtenVam = earWriteDeclarationRows(rows);
+    Logger.log('Vámhatározat digest letöltés KÉSZ. Új sorok száma: ' + writtenVam + ' (Összes találat: ' + rows.length + ')');
+
+    // 2. Hiányzó részletek letöltése (Tax Code)
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    // A SHEET_VAM változót feltételezve, ami az "eÁFA Vámhatározatok" vagy hasonló
+    if (typeof SHEET_VAM === 'undefined') {
+       Logger.log('Hiba: SHEET_VAM konstans nem található.');
+       return;
+    }
+    var sh = ss.getSheetByName(SHEET_VAM);
+
+    if (!sh) {
+      Logger.log('Hiba: "' + SHEET_VAM + '" sheet nem található.');
+      return;
+    }
+
+    var hMap = dpGetHeaderMap(sh);
+    var idColIdx  = hMap['Határozat azonosítója'];
+    var resColIdx = hMap['Határozatszám'];
+    var dlColIdx  = hMap['Részletek LETÖLTVE'];
+
+    if (!idColIdx || !resColIdx || !dlColIdx) {
+      Logger.log('Hiba: szükséges fejlécek hiányoznak a "' + SHEET_VAM + '" sheetből.');
+      return;
+    }
+
+    var lastRow = sh.getLastRow();
+    if (lastRow < 2) {
+      Logger.log('Nincs adat a vámhatározatok táblában.');
+      return;
+    }
+
+    var data = sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).getValues();
+    var pending = [];
+    for (var i = 0; i < data.length; i++) {
+      var dl     = String(data[i][dlColIdx  - 1]).trim();
+      var cdpsId = String(data[i][idColIdx  - 1]).trim();
+      var resId  = String(data[i][resColIdx - 1]).trim();
+      if (cdpsId && resId && dl === '') {
+        pending.push({ cdpsId: cdpsId, resolutionId: resId });
+      }
+    }
+
+    if (pending.length === 0) {
+      Logger.log('autoSyncEarLast5Days: ÖSSZEGZÉS - Minden sor részletei már le vannak töltve. Nincs hiányzó adat. VÉGE.');
+      return;
+    }
+
+    Logger.log(pending.length + ' határozathoz hiányzik a részletes XML. Letöltés indítása...');
+
+    var ok = 0, fail = 0;
+
+    for (var j = 0; j < pending.length; j++) {
+      try {
+        var result = queryCustomsDeclarationTaxCode({
+          cdpsId:               pending[j].cdpsId,
+          resolutionId:         pending[j].resolutionId,
+          declarationDirection: 'IMPORTER'
+        });
+        earWriteDeclarationDetail(result);
+        ok++;
+      } catch (e) {
+        fail++;
+        Logger.log('eÁFA Hiba [' + pending[j].cdpsId + ']: ' + e.message);
+      }
+    }
+
+    Logger.log('autoSyncEarLast5Days: ÖSSZEGZÉS - KÉSZ. Sikeres: ' + ok + ', Hibás: ' + fail + '. VÉGE.');
+
+  } catch (e) {
+    Logger.log('autoSyncEarLast5Days: VÉGZETES HIBA - ' + e.message);
+  }
+}
+
+// ============================================================
 // KÉZI — egyetlen számla lekérdezése
 // ============================================================
 
