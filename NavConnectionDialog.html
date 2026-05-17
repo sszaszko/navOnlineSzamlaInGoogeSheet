@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<style>
+  body { font-family: 'Roboto', Arial, sans-serif; font-size: 13px; margin: 16px; color: #202124; }
+  h2 { font-size: 16px; margin: 0 0 10px 0; font-weight: 500; }
+  .intro { color: #5f6368; margin-bottom: 14px; line-height: 1.4; }
+  .field { margin-bottom: 12px; }
+  label { display: block; font-weight: 500; margin-bottom: 4px; }
+  .status { font-size: 12px; margin-bottom: 4px; }
+  .status.set   { color: #137333; }
+  .status.unset { color: #c5221f; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 6px 8px; border: 1px solid #dadce0; border-radius: 4px;
+    font-size: 13px; box-sizing: border-box;
+  }
+  input:focus { outline: none; border-color: #1a73e8; }
+  .actions { margin-top: 16px; text-align: right; }
+  button { font-size: 13px; padding: 6px 16px; border: none; border-radius: 4px;
+           cursor: pointer; margin-left: 8px; }
+  .primary { background: #1a73e8; color: white; }
+  .primary:hover { background: #1765cc; }
+  .primary:disabled { background: #dadce0; color: #5f6368; cursor: not-allowed; }
+  .secondary { background: none; color: #1a73e8; }
+  .secondary:hover { background: #f1f3f4; }
+  #message { margin-top: 12px; padding: 8px 12px; border-radius: 4px; font-size: 12px; display: none; }
+  #message.error   { background: #fce8e6; color: #c5221f; }
+  #message.success { background: #e6f4ea; color: #137333; }
+  #message.info    { background: #e8f0fe; color: #1a73e8; }
+
+  #result-view { display: none; text-align: center; padding: 16px 8px; }
+  .save-message { color: #5f6368; font-size: 13px; margin-bottom: 16px; }
+  .result-big-ok    { font-size: 32px; font-weight: 500; color: #137333; margin: 20px 0; }
+  .result-big-error { font-size: 26px; font-weight: 500; color: #c5221f; margin: 20px 0; }
+  .result-detail    { color: #202124; font-size: 18px; margin: 16px 0; line-height: 1.6; }
+  .result-detail b  { color: #137333; font-weight: 600; }
+  .result-detail .result-meta { font-size: 13px; color: #5f6368; }
+  .result-error-msg {
+    text-align: left; background: #fce8e6; color: #c5221f;
+    padding: 10px 12px; border-radius: 4px; font-size: 13px; font-weight: 500;
+    margin: 12px 0; word-break: break-word; white-space: pre-wrap;
+  }
+  .result-hint {
+    text-align: left; background: #fef7e0; color: #5f4500;
+    padding: 10px 12px; border-radius: 4px; font-size: 13px;
+    margin: 12px 0; line-height: 1.4;
+  }
+  .result-diag {
+    text-align: left; background: #f8f9fa; color: #3c4043;
+    padding: 10px 12px; border-radius: 4px; font-size: 12px;
+    margin: 8px 0 0 0; font-family: 'Roboto Mono', monospace;
+    max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  .result-diag .lbl { color: #5f6368; }
+  .result-details {
+    text-align: left; margin: 8px 0 0 0;
+  }
+  .result-details summary {
+    cursor: pointer; font-size: 13px; color: #1a73e8;
+    padding: 4px 0; user-select: none;
+  }
+  .result-details summary:hover { text-decoration: underline; }
+  .result-summary-line {
+    text-align: left; color: #5f6368; font-size: 12px; margin-top: 8px;
+  }
+  #loading {
+    text-align: center; padding: 40px 16px; color: #5f6368;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+
+<div id="loading">Kapcsolat teszt indítása…</div>
+
+<div id="form-view" style="display:none;">
+  <h2>NAV adatkapcsolat beállítása</h2>
+  <p class="intro">
+    Üresen hagyott mező esetén a meglévő érték változatlan marad.
+    A jelszó SHA-512 hash-ként kerül tárolásra (visszafejthetetlen).
+  </p>
+
+  <form id="form" onsubmit="onSubmit(event)">
+    <div class="field">
+      <label for="NAV_LOGIN">NAV felhasználónév</label>
+      <div class="status" id="status_NAV_LOGIN">Betöltés…</div>
+      <input type="text" id="NAV_LOGIN" autocomplete="off"/>
+    </div>
+
+    <div class="field">
+      <label for="NAV_PASSWORD">NAV jelszó</label>
+      <div class="status" id="status_NAV_PASSWORD">Betöltés…</div>
+      <input type="text" id="NAV_PASSWORD" autocomplete="off" spellcheck="false"/>
+    </div>
+
+    <div class="field">
+      <label for="NAV_TAX_NUMBER">Adószám törzsszám (8 számjegy)</label>
+      <div class="status" id="status_NAV_TAX_NUMBER">Betöltés…</div>
+      <input type="text" id="NAV_TAX_NUMBER" autocomplete="off"/>
+    </div>
+
+    <div class="field">
+      <label for="NAV_SIGNATURE_KEY">Aláíró kulcs (signature key)</label>
+      <div class="status" id="status_NAV_SIGNATURE_KEY">Betöltés…</div>
+      <input type="password" id="NAV_SIGNATURE_KEY" autocomplete="new-password"/>
+    </div>
+
+    <div class="field">
+      <label for="NAV_EXCHANGE_KEY">Csere kulcs (exchange key)</label>
+      <div class="status" id="status_NAV_EXCHANGE_KEY">Betöltés…</div>
+      <input type="password" id="NAV_EXCHANGE_KEY" autocomplete="new-password"/>
+    </div>
+
+    <div id="message"></div>
+
+    <div class="actions">
+      <button type="button" class="secondary" onclick="google.script.host.close()">Mégse</button>
+      <button type="submit" class="primary" id="saveBtn">Mentés és teszt</button>
+    </div>
+  </form>
+</div>
+
+<div id="result-view">
+  <div class="save-message" id="save-message"></div>
+  <div id="big-status"></div>
+  <div class="result-detail" id="result-detail"></div>
+  <div class="actions" style="text-align:center;">
+    <button type="button" class="primary" onclick="google.script.host.close()">Bezárás</button>
+  </div>
+</div>
+
+<script>
+  var INIT_MODE = '<?= mode ?>'; // 'setup' vagy 'testOnly'
+  var FIELDS = ['NAV_LOGIN','NAV_PASSWORD','NAV_TAX_NUMBER','NAV_SIGNATURE_KEY','NAV_EXCHANGE_KEY'];
+
+  function setStatus(key, state) {
+    var statusEl = document.getElementById('status_' + key);
+    var inputEl  = document.getElementById(key);
+    if (state && state.hasValue) {
+      statusEl.textContent = '✓ Beállítva' + (state.displayValue ? ': ' + state.displayValue : '.');
+      statusEl.className = 'status set';
+      inputEl.placeholder = 'Csak módosítás esetén töltsd ki';
+    } else {
+      statusEl.textContent = '✗ Még nincs beállítva.';
+      statusEl.className = 'status unset';
+      inputEl.placeholder = 'Csak módosítás esetén töltsd ki';
+    }
+  }
+
+  function showResultView(result) {
+    document.getElementById('form-view').style.display = 'none';
+    document.getElementById('result-view').style.display = 'block';
+
+    document.getElementById('save-message').textContent = result.message || '';
+
+    var bigEl    = document.getElementById('big-status');
+    var detailEl = document.getElementById('result-detail');
+
+    var t = result.test || {};
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    if (t.ok) {
+      bigEl.className = 'result-big-ok';
+      bigEl.textContent = 'Kapcsolat OK ✓';
+      var okHtml =
+        'Környezet: <b>' + esc(t.env) + '</b><br>' +
+        'Felhasználó: <b>' + esc(t.login) + '</b>';
+      if (t.elapsedMs != null) {
+        okHtml += '<div class="result-meta">Válaszidő: ' + esc(t.elapsedMs) + ' ms — HTTP ' + esc(t.httpCode || '?') + '</div>';
+      }
+      detailEl.innerHTML = okHtml;
+    } else {
+      bigEl.className = 'result-big-error';
+      bigEl.textContent = 'Kapcsolat HIBA ✗';
+
+      var html = '';
+      if (t.env)    html += '<div style="font-size:18px; margin-bottom:4px;">Környezet: <b style="color:#202124;">' + esc(t.env) + '</b></div>';
+      if (t.apiUrl) html += '<div class="result-meta" style="word-break:break-all;">API URL: <code>' + esc(t.apiUrl) + '</code></div>';
+
+      // Fő hibaüzenet: NAV errorCode + message ha van, különben a nyers error
+      var mainErr;
+      if (t.parsedErrorCode || t.parsedErrorMessage) {
+        mainErr = (t.parsedErrorCode ? t.parsedErrorCode : 'NAV hiba') +
+                  (t.parsedErrorMessage ? ': ' + t.parsedErrorMessage : '') +
+                  (t.httpCode ? '  (HTTP ' + t.httpCode + ')' : '');
+      } else {
+        mainErr = t.error || 'Ismeretlen hiba';
+      }
+      html += '<div class="result-error-msg">' + esc(mainErr) + '</div>';
+
+      if (t.hint) html += '<div class="result-hint">💡 ' + esc(t.hint) + '</div>';
+
+      // Részletek — alapból összecsukva
+      var diag = '';
+      function row(label, val) {
+        if (val == null || val === '') return '';
+        return '<span class="lbl">' + label + ':</span> ' + esc(val) + '\n';
+      }
+      diag += row('HTTP kód',         t.httpCode);
+      diag += row('Válaszidő (ms)',   t.elapsedMs);
+      diag += row('Body byte',        t.bodyBytes);
+      diag += row('NAV errorCode',    t.parsedErrorCode);
+      diag += row('NAV message',      t.parsedErrorMessage);
+      diag += row('Fetch exception',  t.fetchError);
+      diag += row('requestId',        t.requestId);
+      diag += row('requestTimestamp', t.requestTimestamp);
+      if (t.bodySnippet) {
+        diag += '\n<span class="lbl">Response body:</span>\n' + esc(t.bodySnippet);
+      }
+      if (diag.trim()) {
+        html +=
+          '<details class="result-details">' +
+            '<summary>Részletek</summary>' +
+            '<div class="result-diag">' + diag + '</div>' +
+          '</details>';
+      }
+      html += '<div class="result-summary-line">További részletek: Apps Script → Executions / Logs.</div>';
+
+      detailEl.innerHTML = html;
+    }
+  }
+
+  function showMessage(text, type) {
+    var el = document.getElementById('message');
+    el.textContent = text;
+    el.className = type || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+
+  function loadState() {
+    google.script.run
+      .withSuccessHandler(function (state) {
+        FIELDS.forEach(function (k) { setStatus(k, state[k]); });
+      })
+      .withFailureHandler(function (err) {
+        showMessage('Betöltési hiba: ' + (err && err.message ? err.message : err), 'error');
+      })
+      .getNavConnectionState();
+  }
+
+  function runTestOnly() {
+    document.getElementById('big-status').className = '';
+    document.getElementById('big-status').textContent = 'Kapcsolat tesztelése folyamatban (max 30 mp)…';
+    document.getElementById('result-detail').innerHTML = '';
+    document.getElementById('save-message').textContent = '';
+    google.script.run
+      .withSuccessHandler(function (diag) {
+        showResultView({ message: '', test: diag });
+      })
+      .withFailureHandler(function (err) {
+        showResultView({
+          message: '',
+          test: { ok: false, error: (err && err.message ? err.message : String(err)) }
+        });
+      })
+      .runNavConnectionDiagnostic();
+  }
+
+  function init() {
+    document.getElementById('loading').style.display = 'none';
+    if (INIT_MODE === 'testOnly') {
+      document.getElementById('result-view').style.display = 'block';
+      runTestOnly();
+    } else {
+      document.getElementById('form-view').style.display = 'block';
+      loadState();
+    }
+  }
+
+  function onSubmit(e) {
+    e.preventDefault();
+    var data = {};
+    FIELDS.forEach(function (k) { data[k] = document.getElementById(k).value; });
+    document.getElementById('saveBtn').disabled = true;
+    showMessage('Mentés és kapcsolat teszt folyamatban…', 'info');
+    google.script.run
+      .withSuccessHandler(function (result) {
+        if (result && result.success) {
+          showResultView(result);
+        } else {
+          showMessage((result && result.message) || 'Ismeretlen hiba', 'error');
+          document.getElementById('saveBtn').disabled = false;
+        }
+      })
+      .withFailureHandler(function (err) {
+        showMessage('Hiba: ' + (err && err.message ? err.message : err), 'error');
+        document.getElementById('saveBtn').disabled = false;
+      })
+      .saveNavConnection(data);
+  }
+
+  init();
+</script>
+</body>
+</html>

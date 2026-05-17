@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Google Sans', 'Roboto', Arial, sans-serif;
+    font-size: 13px; margin: 0; padding: 16px 20px 12px;
+    color: #202124; background: #fff;
+  }
+  h2 { font-size: 15px; margin: 0 0 6px 0; font-weight: 500; color: #1a73e8; }
+  .subtitle { color: #5f6368; font-size: 12px; margin-bottom: 14px; line-height: 1.4; }
+
+  .section-label {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .5px; color: #5f6368; margin: 12px 0 6px 0;
+  }
+  .row { display: flex; gap: 12px; margin-bottom: 10px; }
+  .field { flex: 1; }
+  label { display: block; font-size: 12px; color: #3c4043; margin-bottom: 3px; }
+  input[type=date], input[type=text] {
+    width: 100%; padding: 6px 8px;
+    border: 1px solid #dadce0; border-radius: 4px;
+    font-size: 13px; font-family: inherit; color: #202124;
+  }
+  input:focus { outline: none; border-color: #1a73e8; box-shadow: 0 0 0 2px #e8f0fe; }
+  input[readonly] { background: #f8f9fa; color: #5f6368; }
+
+  .info-box {
+    background: #e8f0fe; border-left: 3px solid #1a73e8;
+    padding: 8px 10px; border-radius: 0 4px 4px 0;
+    font-size: 12px; color: #174ea6; margin-bottom: 12px; line-height: 1.5;
+  }
+  .warn-box {
+    background: #fef7e0; border-left: 3px solid #f29900;
+    padding: 8px 10px; border-radius: 0 4px 4px 0;
+    font-size: 12px; color: #5f4500; margin-bottom: 8px; line-height: 1.5;
+    display: none;
+  }
+
+  #status-area { margin-top: 10px; }
+  #status-msg {
+    padding: 8px 10px; border-radius: 4px; font-size: 12px;
+    display: none;
+  }
+  #status-msg.info    { background: #e8f0fe; color: #174ea6; }
+  #status-msg.success { background: #e6f4ea; color: #137333; }
+  #status-msg.error   { background: #fce8e6; color: #c5221f; }
+
+  .actions {
+    margin-top: 14px; text-align: right;
+    border-top: 1px solid #f1f3f4; padding-top: 10px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .actions-left { font-size: 12px; color: #5f6368; }
+  .actions-right { display: flex; gap: 8px; }
+  button {
+    font-size: 13px; padding: 7px 18px; border: none; border-radius: 4px;
+    cursor: pointer; font-family: inherit;
+  }
+  .btn-primary { background: #1a73e8; color: #fff; }
+  .btn-primary:hover { background: #1765cc; }
+  .btn-primary:disabled { background: #dadce0; color: #9aa0a6; cursor: not-allowed; }
+  .btn-secondary { background: none; color: #1a73e8; border: 1px solid #dadce0; }
+  .btn-secondary:hover { background: #f1f3f4; }
+
+  .spinner {
+    display: none; width: 16px; height: 16px;
+    border: 2px solid #dadce0; border-top-color: #1a73e8;
+    border-radius: 50%; animation: spin .7s linear infinite;
+    vertical-align: middle; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<h2 id="dialog-title">Szinkronizálás időszaka</h2>
+<p class="subtitle" id="dialog-subtitle"></p>
+
+<div class="info-box" id="info-box">
+  Az <strong>API lekérdezési ablak</strong> a szűrőnél tágabb: <span id="extra-days-label"></span> nappal bővül
+  mindkét irányban, hogy az eltérő könyvelési dátumú bizonylatokat is le tudja kérdezni.
+</div>
+
+<div class="section-label">API lekérdezési ablak (queryFrom – queryTo)</div>
+<div class="row">
+  <div class="field">
+    <label for="queryFrom">Lekérdezés kezdete</label>
+    <input type="date" id="queryFrom" oninput="onQueryChange()">
+  </div>
+  <div class="field">
+    <label for="queryTo">Lekérdezés vége</label>
+    <input type="date" id="queryTo" oninput="onQueryChange()">
+  </div>
+</div>
+
+<div class="section-label" id="filter-section-label" style="display:none; margin-top:16px;">Könyvelési szűrő</div>
+<div class="info-box" id="filter-info" style="display:none"></div>
+
+<div id="status-area">
+  <div id="status-msg"></div>
+</div>
+
+<div class="actions">
+  <span class="actions-left" id="hint-left"></span>
+  <div class="actions-right">
+    <button class="btn-secondary" onclick="google.script.host.close()">Mégse</button>
+    <button class="btn-primary" id="runBtn" onclick="onRun()">
+      <span class="spinner" id="spinner"></span>
+      <span id="run-label">Szinkronizálás indítása</span>
+    </button>
+  </div>
+</div>
+
+<script>
+  // ── Template variables injected by GAS ────────────────────
+  var SYNC_TYPE   = '<?= syncType ?>';   // 'invoice_in' | 'invoice_out' | 'eVatVam' | 'opg'
+  var QUERY_FROM  = '<?= queryFrom ?>';
+  var QUERY_TO    = '<?= queryTo ?>';
+  var FILTER_FROM = '<?= filterFrom ?>';
+  var FILTER_TO   = '<?= filterTo ?>';
+  var EXTRA_DAYS  = parseInt('<?= extraDays ?>') || 30;
+  var PROP_START  = '<?= propStart ?>';   // Script Property START_DATE or ''
+  var PROP_END    = '<?= propEnd ?>';     // Script Property END_DATE or ''
+  // ──────────────────────────────────────────────────────────
+
+  var TITLES = {
+    invoice_in:  'Bejövő számlák szinkronizálása',
+    invoice_out: 'Kimenő számlák szinkronizálása',
+    eVatVam:     'eÁFA vámhatározatok szinkronizálása',
+    opg:         'OPG nyugták szinkronizálása'
+  };
+  var SUBTITLES = {
+    invoice_in:  'Könyvelési szűrő: Teljesítés dátuma és Adóesedékesség alapján',
+    invoice_out: 'Könyvelési szűrő: Teljesítés dátuma és Adóesedékesség alapján',
+    eVatVam:     'Könyvelési szűrő: Adóesedékesség és Kézbesítés dátuma alapján',
+    opg:         'Szűrő: Kiállítás ideje alapján'
+  };
+
+  function init() {
+    document.getElementById('dialog-title').textContent   = TITLES[SYNC_TYPE]   || 'Szinkronizálás';
+    document.getElementById('dialog-subtitle').textContent = SUBTITLES[SYNC_TYPE] || '';
+    document.getElementById('extra-days-label').textContent = EXTRA_DAYS;
+
+    document.getElementById('queryFrom').value  = QUERY_FROM;
+    document.getElementById('queryTo').value    = QUERY_TO;
+
+    if (PROP_START || PROP_END) {
+      document.getElementById('filter-section-label').style.display = 'block';
+      document.getElementById('filter-info').style.display = 'block';
+      document.getElementById('filter-info').innerHTML = 
+        'Csak azok a tételek íródnak a táblázatba, amelyek könyvelési dátuma (Teljesítés / Adóesedékesség / Kézbesítés) a következő intervallumba esik:<br>' +
+        '<strong>' + (PROP_START || 'Nincs korlát') + '</strong> – ' +
+        '<strong>' + (PROP_END || 'Nincs korlát') + '</strong>';
+    }
+  }
+
+  function onQueryChange() {
+    var qfInput = document.getElementById('queryFrom');
+    var qtInput = document.getElementById('queryTo');
+    var qf = qfInput.value;
+    var qt = qtInput.value;
+    
+    // A query ablakot maximálisan a start/end date + extra_days határolja
+    if (PROP_START && qf) {
+      var minFrom = new Date(PROP_START);
+      minFrom.setDate(minFrom.getDate() - EXTRA_DAYS);
+      var minFromStr = minFrom.toISOString().slice(0, 10);
+      if (qf < minFromStr) qfInput.value = minFromStr;
+    }
+    
+    if (PROP_END && qt) {
+      var maxTo = new Date(PROP_END);
+      maxTo.setDate(maxTo.getDate() + EXTRA_DAYS);
+      var maxToStr = maxTo.toISOString().slice(0, 10);
+      if (qt > maxToStr) qtInput.value = maxToStr;
+    }
+  }
+
+  function showMsg(text, type) {
+    var el = document.getElementById('status-msg');
+    el.textContent = text;
+    el.className = type || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+
+  function setRunning(running) {
+    document.getElementById('runBtn').disabled = running;
+    document.getElementById('spinner').style.display = running ? 'inline-block' : 'none';
+    document.getElementById('run-label').textContent  = running ? 'Szinkronizálás…' : 'Szinkronizálás indítása';
+  }
+
+  function onRun() {
+    var qf = document.getElementById('queryFrom').value;
+    var qt = document.getElementById('queryTo').value;
+    var ff = FILTER_FROM; // Injected by GAS
+    var ft = FILTER_TO;   // Injected by GAS
+
+    if (!qf || !qt) {
+      showMsg('Kérjük, töltsd ki az összes dátum mezőt.', 'error');
+      return;
+    }
+    if (qf > qt) {
+      showMsg('A lekérdezési kezdő dátum nem lehet nagyobb a záró dátumnál.', 'error');
+      return;
+    }
+
+    setRunning(true);
+    showMsg('Szinkronizálás folyamatban… Ez több percig is tarthat.', 'info');
+
+    var params = { dateFrom: qf, dateTo: qt, filterFrom: ff, filterTo: ft };
+    var fnName = getFnName();
+
+    google.script.run
+      .withFailureHandler(function(err) {
+        setRunning(false);
+        showMsg('Hiba: ' + (err && err.message ? err.message : String(err)), 'error');
+      })
+      [fnName](params);
+
+    // Azonnal bezárjuk az ablakot, a szerver oldalon fut tovább
+    setTimeout(function() { google.script.host.close(); }, 100);
+  }
+
+  function getFnName() {
+    switch(SYNC_TYPE) {
+      case 'invoice_in':  return 'dialogRunSyncInvoiceIn';
+      case 'invoice_out': return 'dialogRunSyncInvoiceOut';
+      case 'eVatVam':     return 'dialogRunSyncEVatVam';
+      case 'opg':         return 'dialogRunSyncOpg';
+      default:            return 'dialogRunSyncInvoiceIn';
+    }
+  }
+
+  init();
+</script>
+</body>
+</html>

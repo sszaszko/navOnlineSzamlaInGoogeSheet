@@ -1,0 +1,142 @@
+NAV OPG Integration — Technical Reference for AI Debugging
+System Context
+Google Apps Script (GAS, V8 runtime, var/function style, no ES6 modules) add-on on a Google Spreadsheet. Downloads P7B cash register log files from NAV OPG (Online Pénztárgép) and writes receipt data into two sheets. Source files: OpgApi.js, OpgDataprocessor.js, Menu.js, shared utilities from Navapi.js.
+
+Authentication
+Same NAV Common schema as Online Számla. Fields: login, passwordHash (SHA-512 of plain password, uppercase hex), taxNumber (Script Property), requestSignature = SHA3-512(requestId + timestamp + signatureKey).toUpperCase(). Test credentials hardcoded as OPG_TEST_* constants in OpgApi.js, active when env === "test": login=a5mtm0xr0subgft, password=Ab123456, signKey=d4-a493-b83935e521bf5DVFYT0H9FDE, exchangeKey=eaaf5DVFYT0H8FI3. taxNumber still comes from Script Properties.
+
+SOAP 1.2 Envelope & Content-Type
+Every request is wrapped in a SOAP 1.2 envelope. Namespace declarations go on the body root element:
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+  <soap:Body>
+    <RootElement xmlns:common="http://schemas.nav.gov.hu/NTCA/1.0/common"
+                 xmlns="http://schemas.nav.gov.hu/OPF/1.0/api">
+      <common:header>...</common:header>
+      <common:user>...</common:user>
+      <software>...</software>
+      <!-- body content -->
+    </RootElement>
+  </soap:Body>
+</soap:Envelope>
+Content-Type must be application/soap+xml; charset=UTF-8. Using application/xml causes HTTP 500.
+
+Endpoints
+Test	Production
+Base	https://api-test-onlinepenztargep.nav.gov.hu	https://api-onlinepenztargep.nav.gov.hu
+Status	{base}/queryCashRegisterFile/v1/queryCashRegisterStatus	same path
+File	{base}/queryCashRegisterFile/v1/queryCashRegisterFile	same path
+TestData	{base}/generateCashRegisterTestData/v1/generateCashRegisterTestData	does not exist
+Operations
+queryCashRegisterStatus — root QueryCashRegisterStatusRequest, body <cashRegisterStatusQuery> with optional <APNumberList><APNumber>...</APNumber></APNumberList>. Response: cashRegisterStatusResult > cashRegisterStatusList > cashRegisterStatus[], each with APNumber, lastCommunicationDate, lastFileDate, minAvailableFileNumber, maxAvailableFileNumber.
+
+queryCashRegisterFile — root QueryCashRegisterFileDataRequest, body:
+
+
+<cashRegisterFileDataQuery>
+  <APNumber>A12345678</APNumber>
+  <fileNumberStart>1</fileNumberStart>
+  <fileNumberEnd>10</fileNumberEnd>  <!-- optional -->
+</cashRegisterFileDataQuery>
+Response is MTOM multipart. Path: cashRegisterFileDataResult > cashRegisterFileDataList > cashRegisterFileData[]. Each entry: cashRegisterFileName (e.g. A12345678_26716516_20200720133846_1.P7B), cashRegisterFile (contains xop:Include), fileValidationResultCode (OK/ERROR), fileValidationErrorCode. Also: allFilesSent (boolean), filesNotSentReason, minAvailableFileNumber, maxAvailableFileNumber.
+
+generateCashRegisterTestData — root GenerateCashRegisterTestDataRequest, body:
+
+
+<generateCashRegisterTestDataParameter>
+  <APNumber>A12345678</APNumber>
+</generateCashRegisterTestDataParameter>
+Response: funcCode OK/ERROR + message. Generates 55–76 files per AP. Test APs: A12345678, A12345679.
+
+MTOM Multipart Parsing
+All responses are multipart/related. Content-Type example:
+
+
+Multipart/Related; boundary="----=_Part_N_..."; type="application/xop+xml"; start-info="application/soap+xml"
+Boundary extracted with /boundary\s*=\s*"?([^";]+)"?/i. First part = SOAP XML (application/xop+xml). Remaining parts = binary ZIPs (application/octet-stream).
+
+Part Content-ID header has angle brackets: <UUID@schemas.nav.gov.hu> → stripped to UUID@schemas.nav.gov.hu as the map key.
+
+The xop:Include href uses URL-encoding: cid:UUID%40schemas.nav.gov.hu. Must strip cid: then decodeURIComponent() to get UUID@schemas.nav.gov.hu for the lookup.
+
+FIXED BUG: Without decodeURIComponent, %40 never matches @ → contentBytes = [] for every file → 0 receipts.
+Fix in OpgApi.js opgParseFileResponse(): var cid = decodeURIComponent(hrefVal.replace(/^cid:/, ''));
+
+ZIP + P7B Extraction
+Each binary is a ZIP containing one .P7B (CMS/PKCS7 SignedData wrapping XML).
+
+Utilities.unzip(blob) → blob array
+Byte-search for <?xml marker (0x3c 0x3f 0x78 0x6d 0x6c). Fallback: search for <AEE (0x3c 0x41 0x45 0x45).
+From startIdx, skip past <?xml...?>, read root element tag name from the next opening <tag.
+Find last occurrence of </tagName> using opgFindAllByteOccurrences → this is endIdx.
+Slice bytes[startIdx..endIdx], convert: Utilities.newBlob(slice).getDataAsString('UTF-8').
+Strip declaration: .replace(/^<\?xml[\s\S]*?\?>\s*/i, '').
+FIXED BUG: Old backwards scan for last > — ASN.1 trailing bytes (certificates, SignerInfos) in the P7B contain 0x3e → binary garbage included → "Content is not allowed in trailing section" SAXParseException for ~60% of files.
+Fix: use the closing tag of the root element name as the end boundary.
+
+Log XML Schema (V2_AEEnaplo, 48/2013 NGM rendelet)
+The XML root element is <ROWS> — it is the root, not a child.
+
+FIXED BUG: navFindFirst(root, 'ROWS') searches for a child named ROWS, but root itself is ROWS → always null.
+Fix in opgIngestLogXml(): var rows = (root.getName() === 'ROWS') ? root : navFindFirst(root, 'ROWS');
+
+Record type codes (children of ROWS):
+
+Tag	Meaning	Practice?
+NYN	Real receipt	no
+NYT	Practice receipt	yes — filtered if OPG_INCLUDE_PRACTICE=false
+ESN	Simplified invoice	no
+EST	Practice simplified invoice	yes
+SZN	Storno receipt	no
+SZT	Practice storno	yes
+VBN	Return receipt	no
+VBT	Practice return	yes
+NFN	Daily turnover report	no
+PJN	Cash register summary (contains VAT table)	no
+Key fields: NSZ=serial, CTS=timestamp, SUM=total, NAV=verification code, APN=AP number, DRC=payments (FE1=cash, FE2=card, FEE=health fund, FEV[]=FX, FE3[]=other), ITL>Tetel[]=line items (NA=name, QY=qty, IU=unit, UN=unit price, SU=line total, VC=VAT group code).
+
+VAT group codes: letter+digits (e.g. A01). Default prefix rates: A=5%, B=18%, C=27%, D=0%, E=null. Dynamic overrides from PJN/NFN VRA blocks (VC + VP or VPC fields). If rate > 1 → divide by 100. Cache: pjnCache[apNumber][vc] = rate, built in a first pass before ingestion.
+
+ID Generation & File Number
+
+bizonylatId = SHA1(apNumber + '|' + fileNumber + '|' + recordIndex).substring(0, 12)
+tetelId     = SHA1(bizonylatId + '|' + lineIndex).substring(0, 12)
+recordIndex = 1-based position in ROWS children. fileNumber from filename regex /(\d{3,})(?!.*\d)/ (last numeric group of 3+ digits).
+
+State Management
+PropertiesService.getDocumentProperties(), key 'OPG_STATE', value JSON:
+
+
+{ "A12345678": { "lastProcessedFileNumber": 55, "lastRunUtc": "2026-05-17T..." } }
+startNum = Math.max(minAvailableFileNumber, lastProcessedFileNumber + 1). Saved after each AP. Reset: opgClearState().
+
+Sheets
+OPG Nyugta fejléc (13 cols): Bizonylat ID, AP-szám, Naplófájl sorszám, Rekord sorszám, Bizonylat típus, Sorszám, Kiállítás ideje, Végösszeg, Elsődleges fiz. mód, Fizetési mód részletező, NAV ellenőrző kód, Naplófájl név, Letöltve.
+
+OPG Nyugta tétel (10 cols): Tétel ID, Bizonylat ID, Sor index, Megnevezés, Mennyiség, Mértékegység, Egységár, Bruttó érték, ÁFA kód, ÁFA mérték.
+
+Row 1 = header (blue #cfe2f3, bold, frozen). Upsert: only new IDs appended.
+
+Debug Controls
+OPG_DEBUG_LOG (global boolean, default false): when true, logs every request URL+body and every response Content-Type, XML text, attachment size and first 64 bytes hex. Auto-enabled by menuOpgTestEnvironment().
+
+Run summary diagnostic fields: nullXml (content extraction failed), practiceSkipped (filtered practice types), parseErrors, noRows.
+
+NAV Response Namespace Pattern
+ns2 = http://schemas.nav.gov.hu/NTCA/1.0/common (header, result, funcCode, errorCode, message, user fields).
+ns3 = http://schemas.nav.gov.hu/OPF/1.0/api (all OPF-specific elements).
+navFindFirst uses getName() (local name, no prefix) → fully namespace-transparent.
+
+Common Failure Modes
+Symptom	Cause	Fix
+HTTP 500	Wrong Content-Type or no SOAP envelope	application/soap+xml, add <soap:Envelope>
+INVALID_REQUEST	Wrong root element name or missing required child	Check exact element names against spec
+contentBytes=[] all files	xop:Include href %40 not decoded	decodeURIComponent before CID lookup
+SAXParseException: trailing section	P7B end via last > includes ASN.1 bytes	Use </rootTagName> last occurrence as end
+root=ROWS / Nincs ROWS	navFindFirst searching for child when root is the element	root.getName()==='ROWS' ? root : navFindFirst(...)
+0 receipts, no errors	OPG_INCLUDE_PRACTICE=false, test data is all practice types	Set OPG_INCLUDE_PRACTICE=true to verify
+Loop stuck on allFilesSent=false	Cursor not advancing	Safety break: if (lastReceived + 1 <= cursor) break
+Shared Helper Functions (Navapi.js)
+navFindFirst(el, name) — recursive depth-first by local name. navFindAll — same, all matches. navFindDirectChildren — non-recursive. navTextOf(el) — getText().trim() or ''. navXmlEscape — escapes & < > " '. navSha512Hex — SHA-512 hex. navComputeRequestSignature(id, ts, key) — SHA3-512 uppercase. navNewRequestIdAndTimestamp() — {requestId: 'GAS'+ms, timestamp: ISO8601 UTC}. opgStringToUtf8Bytes(s) — Utilities.newBlob(s).getBytes() (signed). opgFindAllByteOccurrences(haystack, needle) — both must be same signedness; ASCII needles always safe.

@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:developers.google.com)",
+      "Bash(awk '/var TETEL_MEZO_ERTEKEK = \\\\{/,/\\\\};/')",
+      "Bash(grep -v \"^$\")",
+      "Bash(gh api *)",
+      "WebFetch(domain:nav.gov.hu)",
+      "WebFetch(domain:onlineszamla-test.nav.gov.hu)",
+      "Bash(curl -sLo /tmp/opf_spec.pdf \"https://github.com/nav-gov-hu/Online-Cash-Register-Logfile/raw/master/docs/OPF_specifik%C3%A1cio_v1.2.1.pdf\")",
+      "Read(//tmp/**)",
+      "Bash(mkdir -p /c/tmp)",
+      "Bash(curl -sLo /c/tmp/opf_spec.pdf \"https://github.com/nav-gov-hu/Online-Cash-Register-Logfile/raw/master/docs/OPF_specifik%C3%A1cio_v1.2.1.pdf\")",
+      "Read(//c/tmp/**)",
+      "Bash(pdftotext -layout /c/tmp/opf_spec.pdf /c/tmp/opf_spec.txt)",
+      "Bash(node --check OpgApi.js)",
+      "Bash(node --check OpgDataprocessor.js)",
+      "Bash(node --check Menu.js)",
+      "Bash(node --check ProcessNAV_xls.js)"
+    ]
+  }
+}

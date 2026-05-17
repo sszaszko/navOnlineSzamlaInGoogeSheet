@@ -26,14 +26,18 @@ function clearAllData() {
     const ui = SpreadsheetApp.getUi();
     const response = ui.alert(
         'Figyelem!',
-        'Biztosan törölni szeretné a "Fejléc adatok" és "Tétel adatok" munkalapok tartalmát, valamint a feldolgozott fájlok listáját? Ez a művelet nem vonható vissza.',
+        'Biztosan törölni szeretné a "Fejléc adatok", "Tétel adatok", "Fejléc KIMENŐ", "Tételek KIMENŐ" munkalapok tartalmát, valamint a feldolgozott fájlok listáját? Ez a művelet nem vonható vissza.',
         ui.ButtonSet.YES_NO
     );
 
     if (response == ui.Button.YES) {
         try {
             const ss = SpreadsheetApp.getActiveSpreadsheet();
-            const sheetNamesToClearHeaders = ["Fejléc adatok", "Tétel adatok"];
+            const sheetNamesToClearHeaders = [
+                "Fejléc adatok", "Tétel adatok",
+                "Fejléc KIMENŐ", "Tételek KIMENŐ",
+                OPG_SHEET_FEJLEC, OPG_SHEET_TETEL
+            ];
             const processedSheetName = "feldolgozott";
 
             // Adatlapok törlése a fejléc megtartásával
@@ -49,6 +53,9 @@ function clearAllData() {
             if (processedSheet) {
                 processedSheet.clearContents();
             }
+
+            // OPG state property törlése (PropertiesService Document Properties)
+            try { opgClearState(); } catch (_eOpg) { /* OpgDataprocessor.js nincs betöltve */ }
 
             ui.alert('Az adatok és a feldolgozási állapot törlése sikeresen befejeződött.');
         } catch (e) {
