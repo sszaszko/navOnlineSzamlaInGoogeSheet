@@ -96,12 +96,17 @@ function opgRunSync(options) {
   options = options || {};
   var tag = options.tag || 'opgRunSync';
   var maxAp = options.maxApPerRun || OPG_MAX_AP_PER_RUN;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
 
+  ss.toast('OPG sheetek ellenőrzése...', '⏳ OPG', 4);
   opgEnsureSheets();
 
   Logger.log('[' + tag + '] Pénztárgép státuszok lekérdezése...');
+  ss.toast('Pénztárgép státuszok lekérdezése (NAV)...', '⏳ OPG státusz', 8);
   var statusList = opgQueryCashRegisterStatus({});
   Logger.log('[' + tag + '] AP-k száma: ' + statusList.length);
+  ss.toast(statusList.length + ' AP-szám megérkezett. Feldolgozás indul (max ' + maxAp + ' AP/futás)...',
+    '⏳ OPG', 6);
 
   var state = opgLoadState();
   var summary = { apProcessed: 0, files: 0, bizonylatok: 0, tetelek: 0, nullXml: 0, practiceSkipped: 0, errors: [] };
@@ -122,6 +127,8 @@ function opgRunSync(options) {
     }
 
     Logger.log('[' + tag + '] ' + ap.apNumber + ': feldolgozás ' + startNum + '..' + endNum);
+    ss.toast('AP ' + ap.apNumber + ': fájl ' + startNum + '..' + endNum + ' letöltése + feldolgozása...',
+      '⏳ OPG AP', 15);
     try {
       var apSum = opgProcessApRange(ap.apNumber, startNum, endNum, tag);
       summary.apProcessed++;
@@ -136,10 +143,13 @@ function opgRunSync(options) {
         lastRunUtc:              new Date().toISOString()
       };
       opgSaveState(state);
+      ss.toast('AP ' + ap.apNumber + ' kész: ' + apSum.files + ' fájl, ' + apSum.bizonylatok +
+        ' bizonylat, ' + apSum.tetelek + ' tétel.', '✔ OPG AP', 6);
     } catch (e) {
       var msg = ap.apNumber + ': ' + e.message;
       summary.errors.push(msg);
       Logger.log('[' + tag + '] HIBA ' + msg);
+      ss.toast('AP ' + ap.apNumber + ' hiba: ' + e.message, '⚠ OPG hiba', 8);
     }
   }
 

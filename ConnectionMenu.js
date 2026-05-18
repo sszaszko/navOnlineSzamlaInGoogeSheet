@@ -19,7 +19,7 @@
 function menuSetupNavConnection() {
   var template = HtmlService.createTemplateFromFile('NavConnectionDialog');
   template.mode = 'setup';
-  var html = template.evaluate().setWidth(520).setHeight(820);
+  var html = template.evaluate().setWidth(560).setHeight(820);
   SpreadsheetApp.getUi().showModalDialog(html, 'NAV adatkapcsolat beállítása');
 }
 
@@ -28,6 +28,13 @@ function menuTestConnection() {
   template.mode = 'testOnly';
   var html = template.evaluate().setWidth(520).setHeight(640);
   SpreadsheetApp.getUi().showModalDialog(html, 'NAV kapcsolat teszt');
+}
+
+function menuSetupTriggers() {
+  var template = HtmlService.createTemplateFromFile('NavConnectionDialog');
+  template.mode = 'triggersOnly';
+  var html = template.evaluate().setWidth(560).setHeight(720);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Automatikus szinkron időzítése');
 }
 
 // ============================================================
@@ -211,4 +218,182 @@ function runNavConnectionDiagnostic() {
 
   Logger.log('=== NAV kapcsolat teszt vége ===');
   return diag;
+}
+
+// ============================================================
+// AUTOMATIZÁLÁS BEÁLLÍTÁSA — NavConnectionDialog.html 3. lépés
+// ============================================================
+//
+// A 4 időzíthető trigger-végpont: osaAutoSync, osaAutoSyncOutbound,
+// eVatVamAutoSync, opgAutoSync. A munkaidő határait, az ütemezést és
+// a START_DATE / END_DATE Script Property-t innen lehet beállítani.
+
+// AUTOMATION_TASKS és TRIGGER_CUTOFF_DAYS_AFTER_END konstansok a Config.js-ben.
+
+/**
+ * Kiszámítja az END_DATE alapú cutoff állapotot. Ha az END_DATE Script Property
+ * be van állítva és a mai nap > END_DATE + TRIGGER_CUTOFF_DAYS_AFTER_END, akkor
+ * az auto-triggerek nem futnak.
+ *
+ * @return {{ active: boolean, pastEndDate: boolean, endDate: ?string, cutoffDate: ?string }}
+ *   active      → már túl a cutoff-on (END_DATE + N nap) → triggerek nem futnak
+ *   pastEndDate → már túl az END_DATE-en (de még a cutoff előtt → triggerek futnak,
+ *                 de hamarosan leállnak)
+ */
+function getTriggerCutoffState() {
+  var endStr = PropertiesService.getScriptProperties().getProperty('END_DATE');
+  if (!endStr) return { active: false, pastEndDate: false, endDate: null, cutoffDate: null };
+
+  var end = new Date(endStr);
+  if (isNaN(end.getTime())) return { active: false, pastEndDate: false, endDate: endStr, cutoffDate: null };
+
+  var cutoff = new Date(end);
+  cutoff.setDate(cutoff.getDate() + TRIGGER_CUTOFF_DAYS_AFTER_END);
+  var cutoffStr = Utilities.formatDate(cutoff, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  var now = new Date();
+
+  return {
+    active:      now > cutoff,
+    pastEndDate: now > end,
+    endDate:     endStr,
+    cutoffDate:  cutoffStr
+  };
+}
+
+/**
+ * Belépési ellenőrzés az auto-trigger végpontoknak — ha az END_DATE óta
+ * 30+ nap eltelt, a hívó függvény álljon le. Logba is ír.
+ *
+ * @param  {string} tag  hívó tag (loghoz)
+ * @return {boolean}     true → kihagyandó
+ */
+function shouldSkipTriggerByEndDate(tag) {
+  var st = getTriggerCutoffState();
+  if (st.active) {
+    Logger.log('[' + (tag || 'autoSync') + '] KIHAGYVA — END_DATE (' + st.endDate +
+               ') + ' + TRIGGER_CUTOFF_DAYS_AFTER_END + ' nap eltelt (cutoff: ' +
+               st.cutoffDate + ').');
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Visszaadja a dialog kezdeti állapotát az automatizálás lépéshez.
+ */
+function getAutomationConfig() {
+  var p = PropertiesService.getScriptProperties();
+  var year = new Date().getFullYear();
+  var defStart = year + '-01-01';
+  var defEnd   = year + '-12-31';
+
+  var cfg = getConfig(); // TriggerShiftManager.getConfig()
+  var tasksOut = AUTOMATION_TASKS.map(function (t) {
+    var saved = (cfg.tasks && cfg.tasks[t.fn]) || {};
+    return {
+      fn:        t.fn,
+      label:     t.label,
+      work_time: saved.work_time || 'none',
+      off_work:  saved.off_work  || 'none'
+    };
+  });
+
+  return {
+    startDate:  p.getProperty('START_DATE') || defStart,
+    endDate:    p.getProperty('END_DATE')   || defEnd,
+    workStart:  (cfg.workHours && cfg.workHours.start) || '08:00',
+    workEnd:    (cfg.workHours && cfg.workHours.end)   || '17:00',
+    tasks:      tasksOut,
+    cutoff:     getTriggerCutoffState(),
+    cutoffDaysAfterEnd: TRIGGER_CUTOFF_DAYS_AFTER_END
+  };
+}
+
+/**
+ * Elmenti az automatizálás beállításait (Properties-be JSON-ként), majd
+ * REGISZTRÁL EGY EGYSZERI HÁTTÉRTRIGGERT, amely az aktuális dialog-szál
+ * lezárása után a háttérben felépíti a triggereket. A dialog így azonnal
+ * bezárható — nem várakozik 30+ másodpercet a felhasználó.
+ *
+ * @param {Object} data {
+ *   startDate, endDate, workStart, workEnd,
+ *   tasks: [{ fn, work_time, off_work }, ...]
+ * }
+ */
+function saveAutomationConfig(data) {
+  var p = PropertiesService.getScriptProperties();
+
+  // 1. START_DATE / END_DATE
+  if (data && data.startDate) p.setProperty('START_DATE', data.startDate);
+  else                        p.deleteProperty('START_DATE');
+  if (data && data.endDate)   p.setProperty('END_DATE', data.endDate);
+  else                        p.deleteProperty('END_DATE');
+
+  // 2. Munkaidő határok
+  setWorkHours(data.workStart, data.workEnd);
+
+  // 3. Feladatok regisztrálása — friss lista (régi, idegen tasks törölve)
+  var cfg = getConfig();
+  cfg.tasks = {};
+  saveConfig(cfg);
+
+  var validFns = AUTOMATION_TASKS.map(function (t) { return t.fn; });
+  (data.tasks || []).forEach(function (t) {
+    if (validFns.indexOf(t.fn) < 0) return;
+    registerTask(t.fn, t.work_time || 'none', 'work_time');
+    registerTask(t.fn, t.off_work  || 'none', 'off_work');
+  });
+
+  // 4. Aszinkron triggerépítés — egy egyszeri háttértrigger meghívja
+  //    a _installTriggersJob()-ot, ami felépíti a teljes keretrendszert.
+  //    Előbb töröljük az esetleges korábbi job-triggert, hogy ne legyen duplikálás.
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === '_installTriggersJob') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+  ScriptApp.newTrigger('_installTriggersJob').timeBased().after(TRIGGER_AFTER_BUFFER_MS).create();
+
+  return {
+    success: true,
+    message: 'Beállítások elmentve ✓ — a triggerek felépítése a háttérben folyik (' +
+             (TRIGGER_AFTER_BUFFER_MS / 1000) + ' mp múlva indul, kb. ' +
+             (TRIGGER_RECURRING_DELAY_MS / 1000 + 5) + ' mp alatt készül el).'
+  };
+}
+
+/**
+ * HÁTTÉR FELADAT — egyszeri triggerről indul a saveAutomationConfig után.
+ * Felépíti a teljes shift framework triggereket a Properties-ben tárolt
+ * konfigurációból.
+ */
+function _installTriggersJob() {
+  Logger.log('[_installTriggersJob] HÁTTÉR TRIGGER ÉPÍTÉS INDUL');
+  try {
+    installShiftFrameworkFromConfig();
+    Logger.log('[_installTriggersJob] KÉSZ ✓');
+  } catch (e) {
+    Logger.log('[_installTriggersJob] HIBA: ' + e.message);
+  }
+}
+
+/**
+ * TOTÁLIS TRIGGER TÖRLŐ — a projekt MINDEN triggerét eltávolítja
+ * a jelenlegi felhasználóhoz tartozóan (ScriptApp.getProjectTriggers()).
+ * Ezután semmilyen időzített futás nincs a scriptben.
+ *
+ * @return {{ success: boolean, deleted: number, message: string }}
+ */
+function deleteAllProjectTriggers() {
+  var triggers = ScriptApp.getProjectTriggers();
+  var count = triggers.length;
+  triggers.forEach(function (t) {
+    try { ScriptApp.deleteTrigger(t); } catch (_e) { /* ignore */ }
+  });
+  Logger.log('[deleteAllProjectTriggers] ' + count + ' db trigger törölve.');
+  return {
+    success: true,
+    deleted: count,
+    message: count + ' db trigger törölve. Most már nincs aktív időzítés.'
+  };
 }

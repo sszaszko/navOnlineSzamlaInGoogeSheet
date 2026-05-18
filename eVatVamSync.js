@@ -17,12 +17,7 @@
 // MENÜ HANDLEREK
 // ============================================================
 
-function menuEVatVamQueryDigest()    { eVatVamMenuSync(); }
-function menuEVatVamDownloadMissing() { eVatVamMenuSync(); }
-
-function eVatVamMenuSync() {
-  openSyncDialog('eVatVam', null);
-}
+function menuEVatVamQueryDigest() { openSyncDialog('eVatVam', null); }
 
 // ============================================================
 // TIME-DRIVEN TRIGGER VÉGPONT
@@ -30,8 +25,10 @@ function eVatVamMenuSync() {
 
 function eVatVamAutoSync(opts) {
   var tag = 'eVatVamAutoSync';
+  if (!opts && shouldSkipTriggerByEndDate(tag)) return;
   var ss  = SpreadsheetApp.getActiveSpreadsheet();
   Logger.log('[' + tag + '] INDULÁS');
+  ss.toast('Vámhatározat szinkronizálás indul...', '▶ eÁFA Vám', 5);
 
   var bounds;
   if (opts && opts.dateFrom && opts.dateTo) {
@@ -50,13 +47,20 @@ function eVatVamAutoSync(opts) {
   var filter = { filterFrom: bounds.filterFrom, filterTo: bounds.filterTo };
 
   try {
+    ss.toast('Határozat lista letöltése (' + bounds.queryFrom + ' – ' + bounds.queryTo + ')...',
+      '⏳ Digest API', 10);
     var rows = eVatVamQueryDigest({
       declarationDateFrom:  bounds.queryFrom,
       declarationDateTo:    bounds.queryTo,
       declarationDirection: 'IMPORTER'
     });
+    ss.toast('NAV-tól ' + rows.length + ' határozat megérkezett. Sheet írás...',
+      '⏳ Vám mentés', 8);
+
     var writtenVam = eVatVamWriteDeclarationRows(rows, filter);
     Logger.log('[' + tag + '] Digest KÉSZ. Új sorok: ' + writtenVam + ' / ' + rows.length);
+    ss.toast(writtenVam + ' új határozat beírva (' + rows.length + ' közül). Részletek következnek...',
+      '✔ Lista kész', 8);
 
     eVatVamDownloadMissing(writtenVam);
   } catch (e) {
@@ -127,15 +131,21 @@ function eVatVamDownloadMissing(writtenVam) {
     return;
   }
 
-  Logger.log('[' + tag + '] ' + pending.length + ' határozathoz hiányzik részletes XML.');
-  ss.toast(pending.length + ' db hiányzó vámhatározat részlet letöltése indul...', 'Folyamatban', 5);
+  var totalBatches = Math.ceil(pending.length / EVATVAM_BATCH_SIZE);
+  Logger.log('[' + tag + '] ' + pending.length + ' határozathoz hiányzik részletes XML (' + totalBatches + ' batch).');
+  ss.toast(pending.length + ' db hiányzó vámhatározat részlet letöltése indul (' + totalBatches +
+    ' batch, ' + EVATVAM_BATCH_SIZE + '/batch)...', '⏳ Részlet letöltés', 8);
 
   var ok = 0, fail = 0;
-  var lastToastTime = Date.now();
+  var batchNo = 0;
 
   for (var i = 0; i < pending.length; i += EVATVAM_BATCH_SIZE) {
     var chunkKeys    = pending.slice(i, i + EVATVAM_BATCH_SIZE);
     var chunkResults = [];
+    batchNo++;
+
+    ss.toast('Batch ' + batchNo + '/' + totalBatches + ' — ' + chunkKeys.length +
+      ' határozat XML letöltése NAV-tól...', '⏳ Letöltés', 15);
 
     for (var j = 0; j < chunkKeys.length; j++) {
       try {
@@ -151,21 +161,18 @@ function eVatVamDownloadMissing(writtenVam) {
       }
     }
 
+    var processed = Math.min(i + EVATVAM_BATCH_SIZE, pending.length);
     if (chunkResults.length > 0) {
+      ss.toast('Batch ' + batchNo + '/' + totalBatches + ' — kiírás sheetbe (' +
+        processed + '/' + pending.length + ')...', '⏳ Sheet írás', 15);
       try {
         eVatVamProcessDeclarationDataBatch(chunkResults);
       } catch (e) {
         Logger.log('[' + tag + '] Batch kiírási hiba: ' + e.message);
+        ss.toast('Batch ' + batchNo + ' kiírási hiba: ' + e.message, '⚠ Hiba', 8);
       }
     }
-
-    var now       = Date.now();
-    var processed = Math.min(i + EVATVAM_BATCH_SIZE, pending.length);
-    if (now - lastToastTime > 15000 || processed === pending.length) {
-      ss.toast('Folyamatban: ' + processed + ' / ' + pending.length + '...', 'Kis türelmet', 15);
-      Logger.log('[' + tag + '] Folyamatban: ' + processed + ' / ' + pending.length);
-      lastToastTime = now;
-    }
+    Logger.log('[' + tag + '] Folyamatban: ' + processed + ' / ' + pending.length);
   }
 
   var summary = 'Vámhatározatok: ' + (wVam > 0 ? wVam + ' új sor, ' : '') + ok + ' részlet letöltve' +

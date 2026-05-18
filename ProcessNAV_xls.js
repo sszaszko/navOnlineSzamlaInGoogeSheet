@@ -26,7 +26,10 @@ function clearAllData() {
     const ui = SpreadsheetApp.getUi();
     const response = ui.alert(
         'Figyelem!',
-        'Biztosan törölni szeretné a "Fejléc adatok", "Tétel adatok", "Fejléc KIMENŐ", "Tételek KIMENŐ" munkalapok tartalmát, valamint a feldolgozott fájlok listáját? Ez a művelet nem vonható vissza.',
+        'Biztosan törölni szeretné a számla (bejövő/kimenő fejléc + tételek), vámhatározat ' +
+        '("' + EVATVAM_SHEET + '") és OPG ("' + OPG_SHEET_FEJLEC + '", "' + OPG_SHEET_TETEL +
+        '") munkalapok tartalmát, valamint a feldolgozott fájlok listáját?\n\n' +
+        'Ez a művelet nem vonható vissza.',
         ui.ButtonSet.YES_NO
     );
 
@@ -36,30 +39,48 @@ function clearAllData() {
             const sheetNamesToClearHeaders = [
                 "Fejléc adatok", "Tétel adatok",
                 "Fejléc KIMENŐ", "Tételek KIMENŐ",
+                EVATVAM_SHEET,
                 OPG_SHEET_FEJLEC, OPG_SHEET_TETEL
             ];
             const processedSheetName = "feldolgozott";
 
+            ss.toast('Adatok törlése folyamatban (' + sheetNamesToClearHeaders.length + ' lap)...', '⏳ Törlés', 5);
+
             // Adatlapok törlése a fejléc megtartásával
+            let clearedCount = 0;
+            let skippedCount = 0;
             for (const sheetName of sheetNamesToClearHeaders) {
                 const sheet = ss.getSheetByName(sheetName);
                 if (sheet && sheet.getLastRow() > 1) {
-                    sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getMaxColumns()).clearContent();
+                    const rowsToClear = sheet.getLastRow() - 1;
+                    ss.toast('"' + sheetName + '" (' + rowsToClear + ' sor) törlése...', '⏳ Törlés', 5);
+                    sheet.getRange(2, 1, rowsToClear, sheet.getMaxColumns()).clearContent();
+                    clearedCount++;
+                } else {
+                    skippedCount++;
                 }
             }
 
             // Feldolgozott lista teljes törlése
             const processedSheet = ss.getSheetByName(processedSheetName);
             if (processedSheet) {
+                ss.toast('"' + processedSheetName + '" lista törlése...', '⏳ Törlés', 5);
                 processedSheet.clearContents();
             }
 
             // OPG state property törlése (PropertiesService Document Properties)
-            try { opgClearState(); } catch (_eOpg) { /* OpgDataprocessor.js nincs betöltve */ }
+            try {
+                opgClearState();
+                ss.toast('OPG state property törölve.', '⏳ Törlés', 3);
+            } catch (_eOpg) { /* OpgDataprocessor.js nincs betöltve */ }
 
+            ss.toast(clearedCount + ' adatlap törölve' +
+                (skippedCount > 0 ? ' (' + skippedCount + ' már üres volt)' : '') + '.',
+                '✔ Törlés kész', 8);
             ui.alert('Az adatok és a feldolgozási állapot törlése sikeresen befejeződött.');
         } catch (e) {
             Logger.log(`Hiba az adatok törlése közben: ${e.message}`);
+            SpreadsheetApp.getActiveSpreadsheet().toast('Hiba: ' + e.message, '✖ Törlés hiba', 10);
             ui.alert(`Hiba történt az adatok törlése közben: ${e.message}`);
         }
     }
@@ -70,12 +91,15 @@ function clearAllData() {
  */
 function runCategoryUpdateFromMenu() {
     const ui = SpreadsheetApp.getUi();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
     try {
-        ui.alert('Költségtípusok frissítése elindult. A művelet a sorok számától függően időbe telhet.');
+        ss.toast('Költségtípus frissítés indul (a sorszámtól függően időbe telhet)...', '▶ Kategória', 8);
         const count = updateCostCategories();
+        ss.toast(count + ' sor kategorizálva.', '✔ Kategória kész', 8);
         ui.alert(`A kategóriák frissítése befejeződött. Összesen ${count} sor került frissítésre vagy kitöltésre.`);
     } catch (e) {
         Logger.log(`Hiba a kategóriák frissítése közben (menüből futtatva): ${e.message}`);
+        ss.toast('Hiba: ' + e.message, '✖ Kategória hiba', 10);
         ui.alert(`Hiba történt a kategóriák frissítése közben: ${e.message}`);
     }
 }
@@ -93,14 +117,17 @@ function updateCostCategories() {
     let kategoriakMap = [];
     if (kategoriakSheet && kategoriakSheet.getLastRow() > 1) {
         kategoriakMap = kategoriakSheet.getRange(2, 1, kategoriakSheet.getLastRow() - 1, 4).getValues();
+        ss.toast(kategoriakMap.length + ' kategória szabály beolvasva.', '⏳ Kategória', 4);
     } else {
         Logger.log("Figyelmeztetés: 'kategóriák' munkalap nem található vagy üres. A költségtípusok kitöltése kimarad.");
+        ss.toast('"kategóriák" lap üres — kihagyva.', '⚠ Kategória', 5);
         return 0; // Kilépés, ha nincsenek szabályok
     }
 
     const tetelSheet = ss.getSheetByName("Tétel adatok");
     if (!tetelSheet || tetelSheet.getLastRow() < 2) {
         Logger.log("A 'Tétel adatok' munkalap nem található vagy üres. Nincs mit frissíteni.");
+        ss.toast('"Tétel adatok" üres — kihagyva.', '⚠ Kategória', 5);
         return 0;
     }
 
@@ -116,6 +143,7 @@ function updateCostCategories() {
 
     const dataRange = tetelSheet.getRange(2, 1, tetelSheet.getLastRow() - 1, tetelSheet.getMaxColumns());
     const values = dataRange.getValues();
+    ss.toast(values.length + ' tétel sor vizsgálata (' + kategoriakMap.length + ' szabály)...', '⏳ Kategória', 6);
 
     for (let i = 0; i < values.length; i++) {
         const currentKoltsegTip = values[i][koltsegTipCol - 1];
@@ -180,10 +208,12 @@ function postProcessSheets() {
 
     try {
         Logger.log("--- Utófeldolgozás megkezdése ---");
+        ss.toast('Utófeldolgozás indul (duplikátum, n/a, kategória, rendezés)...', '▶ Post-process', 6);
 
         // --- "Fejléc adatok" feldolgozása ---
         const fejlecSheet = ss.getSheetByName("Fejléc adatok");
         if (fejlecSheet && fejlecSheet.getLastRow() > 1) {
+            ss.toast('"Fejléc adatok" feldolgozása...', '⏳ Post-process', 5);
             const fejlecHeaders = fejlecSheet.getRange(1, 1, 1, fejlecSheet.getLastColumn()).getValues()[0];
             const szamlaSorszamaCol = fejlecHeaders.indexOf("Számla sorszáma") + 1; // <-- DUPLIKÁTUMHOZ
             const szamlaKelteCol = fejlecHeaders.indexOf("Számla kelte") + 1;
@@ -210,6 +240,10 @@ function postProcessSheets() {
                 }
                 values = uniqueValuesFejlec; // 'values' felülírása a szűrt listával
                 Logger.log(`"Fejléc adatok" duplikátumok törlése utáni sorszám: ${values.length}. Talált duplikátum: ${fejlecDuplicatesFound}`);
+                if (fejlecDuplicatesFound > 0) {
+                    ss.toast('Fejléc: ' + fejlecDuplicatesFound + ' duplikátum eltávolítva (maradt ' + values.length + ' sor).',
+                        '⏳ Post-process', 5);
+                }
                 // === DUPLIKÁTUM SZŰRÉS VÉGE ===
 
                 // Tiszta lap a szűrt adatoknak
@@ -249,10 +283,12 @@ function postProcessSheets() {
                     }
 
                     // Szűrt és 'n/a' mentesített adatok visszaírása
+                    ss.toast('Fejléc: ' + values.length + ' sor visszaírása sheetbe...', '⏳ Post-process', 5);
                     const newFejlecRange = fejlecSheet.getRange(2, 1, values.length, values[0].length);
                     newFejlecRange.setValues(values);
                     Logger.log(`"Fejléc adatok" munkalapon 'n/a' értékek cserélve (Nettó, Bruttó, ÁFA).`);
 
+                    ss.toast('Fejléc rendezése "Számla kelte" szerint...', '⏳ Post-process', 4);
                     newFejlecRange.sort({
                         column: szamlaKelteCol,
                         ascending: true
@@ -269,6 +305,7 @@ function postProcessSheets() {
         // --- "Tétel adatok" feldolgozása ---
         const tetelSheet = ss.getSheetByName("Tétel adatok");
         if (tetelSheet && tetelSheet.getLastRow() > 1) {
+            ss.toast('"Tétel adatok" feldolgozása...', '⏳ Post-process', 5);
             const tetelHeaders = tetelSheet.getRange(1, 1, 1, tetelSheet.getLastColumn()).getValues()[0];
             const tetelSzamlaSorszamaCol = tetelHeaders.indexOf("Számla sorszáma") + 1; // <-- DUPLIKÁTUMHOZ
             const sorszamCol = tetelHeaders.indexOf("Tétel sorszáma") + 1; // <-- DUPLIKÁTUMHOZ
@@ -298,6 +335,10 @@ function postProcessSheets() {
                 }
                 values = uniqueValuesTetel; // 'values' felülírása a szűrt listával
                 Logger.log(`"Tétel adatok" duplikátumok törlése utáni sorszám: ${values.length}. Talált duplikátum: ${tetelDuplicatesFound}`);
+                if (tetelDuplicatesFound > 0) {
+                    ss.toast('Tétel: ' + tetelDuplicatesFound + ' duplikátum eltávolítva (maradt ' + values.length + ' sor).',
+                        '⏳ Post-process', 5);
+                }
                 // === DUPLIKÁTUM SZŰRÉS VÉGE ===
 
                 // Tiszta lap a szűrt adatoknak
@@ -324,6 +365,7 @@ function postProcessSheets() {
                     }
 
                     // Szűrt és 'n/a' mentesített adatok visszaírása
+                    ss.toast('Tétel: ' + values.length + ' sor visszaírása sheetbe...', '⏳ Post-process', 5);
                     const newTetelRange = tetelSheet.getRange(2, 1, values.length, values[0].length);
                     newTetelRange.setValues(values);
                     Logger.log(`"Tétel adatok" munkalapon 'n/a' értékek cserélve.`);
@@ -332,9 +374,7 @@ function postProcessSheets() {
                     categoriesFilledCount = updateCostCategories();
 
                     // Rendezés (az updateCostCategories *után*, de az új tartományon)
-                    // Fontos: Ha a updateCostCategories több sort ad hozzá (ami most nem),
-                    // akkor a 'newTetelRange' helyett újra kellene kérni a data range-t. 
-                    // Jelenleg az updateCostCategories csak meglévő sorokat módosít, így ez biztonságos.
+                    ss.toast('Tétel rendezése (Kelte / Eladó / Sorsz.)...', '⏳ Post-process', 4);
                     newTetelRange.sort([{
                         column: kiallitasCol,
                         ascending: true
@@ -354,6 +394,9 @@ function postProcessSheets() {
             }
         }
         Logger.log("--- Utófeldolgozás befejezve ---");
+        ss.toast('Utófeldolgozás kész: ' + naReplacedCount + ' n/a, ' + categoriesFilledCount +
+            ' kategória, ' + fejlecDuplicatesFound + '+' + tetelDuplicatesFound + ' duplikátum.',
+            '✔ Post-process kész', 8);
         return {
             naCount: naReplacedCount,
             catCount: categoriesFilledCount,
@@ -363,6 +406,7 @@ function postProcessSheets() {
 
     } catch (e) {
         Logger.log(`Hiba az utófeldolgozás során: ${e.message}`);
+        ss.toast('Utófeldolgozás hiba: ' + e.message, '✖ Post-process hiba', 10);
         SpreadsheetApp.getUi().alert(`Hiba történt az utófeldolgozás során: ${e.message}`);
         return {
             naCount: naReplacedCount,
@@ -395,6 +439,7 @@ function appendXLSXDataToGoogleSheet() {
             Logger.log('Hiba: A szkript nincs Google Táblázathoz csatolva.');
             return;
         }
+        targetSpreadsheet.toast('XLSX feldolgozás indul (Drive mappa beolvasása)...', '▶ XLSX', 5);
 
         let processedSheet = targetSpreadsheet.getSheetByName(processedSheetName);
         if (!processedSheet) {
@@ -423,21 +468,29 @@ function appendXLSXDataToGoogleSheet() {
 
         if (xlsxFiles.length === 0) {
             Logger.log('Nincsenek .xlsx fájlok a forrás mappában.');
+            targetSpreadsheet.toast('Nem található .xlsx fájl.', '⚠ XLSX', 5);
             ui.alert('Nem található .xlsx fájl a megadott mappában.');
             return;
         }
+        targetSpreadsheet.toast(xlsxFiles.length + ' fájl található. Feldolgozás indul...', '⏳ XLSX', 5);
         Logger.log('Feldolgozás megkezdődik...');
 
+        let fileIndex = 0;
         for (const xlsxFile of xlsxFiles) {
             const xlsxFileName = xlsxFile.getName();
             let tempGoogleSheetFile = null;
+            fileIndex++;
 
             if (processedFileNames.includes(xlsxFileName)) {
                 Logger.log(`--- Kihagyva (már feldolgozva): "${xlsxFileName}" ---`);
+                targetSpreadsheet.toast(fileIndex + '/' + xlsxFiles.length + ' — "' + xlsxFileName +
+                    '" már feldolgozva, kihagyva.', '⏭ XLSX', 3);
                 continue;
             }
 
             Logger.log(`--- Feldolgozás alatt: "${xlsxFileName}" ---`);
+            targetSpreadsheet.toast(fileIndex + '/' + xlsxFiles.length + ' — "' + xlsxFileName +
+                '" konvertálása...', '⏳ XLSX', 8);
 
             try {
                 tempGoogleSheetFile = Drive.Files.insert({
@@ -479,6 +532,7 @@ function appendXLSXDataToGoogleSheet() {
 
                                 // Adatok beillesztése a megtalált oszloptól kezdve.
                                 destinationSheet.getRange(targetRow, startCol, valuesToCopy.length, valuesToCopy[0].length).setValues(valuesToCopy);
+                                targetSpreadsheet.toast('"' + xlsxFileName + '" → "' + sheetName + '": ' + valuesToCopy.length + ' sor hozzáfűzve.', '⏳ XLSX', 4);
                                 Logger.log(`    ${valuesToCopy.length} sor hozzáfűzve a(z) "${sheetName}" munkalaphoz, a(z) ${startCol}. oszloptól.`);
 
                                 // === KIEGÉSZÍTÉS KEZDETE ===
@@ -519,11 +573,13 @@ function appendXLSXDataToGoogleSheet() {
                     }
                 }
                 processedSheet.appendRow([xlsxFileName]);
+                targetSpreadsheet.toast(fileIndex + '/' + xlsxFiles.length + ' — "' + xlsxFileName + '" KÉSZ.', '✔ XLSX', 4);
                 Logger.log(`  - "${xlsxFileName}" rögzítve a feldolgozottak közé.`);
                 filesProcessedCount++;
 
             } catch (innerError) {
                 Logger.log(`Hiba a(z) "${xlsxFileName}" fájl feldolgozása közben: ${innerError.message}.`);
+                targetSpreadsheet.toast('Hiba "' + xlsxFileName + '" feldolgozása közben: ' + innerError.message, '⚠ XLSX hiba', 8);
             } finally {
                 if (tempGoogleSheetFile) {
                     try {
@@ -539,6 +595,7 @@ function appendXLSXDataToGoogleSheet() {
         Logger.log(`--- Adatbetöltés befejeződött ---`);
         Logger.log(`Feldolgozott új .xlsx fájlok: ${filesProcessedCount}.`);
         Logger.log(`Összesen hozzáfűzött sor: ${totalRowsAppended}.`);
+        targetSpreadsheet.toast('Adatbetöltés kész: ' + filesProcessedCount + ' fájl, ' + totalRowsAppended + ' sor. Utófeldolgozás következik...', '✔ XLSX', 6);
 
         if (filesProcessedCount > 0) {
             // Az utófeldolgozás most már a duplikátum számokat is visszaadja

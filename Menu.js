@@ -17,35 +17,30 @@ function onOpen() {
   var ui = SpreadsheetApp.getUi();
 
   ui.createMenu('NAV számlák')
-    .addItem('Bejövő fejléc adatok letöltése (Digest API)…', 'menuOsaQueryInvoiceDigest')
-    .addItem('Bejövő tételek letöltése (teljes letöltés API)…', 'menuOsaDownloadMissingDetails')
+    .addItem('Bejövő számlák szinkronizálása…', 'menuOsaQueryInvoiceDigest')
+    .addItem('Kimenő számlák szinkronizálása…', 'menuOsaQueryInvoiceDigestOutbound')
+    .addItem('Egy számla kézi lekérdezése és PDF', 'menuQuerySingleInvoice')
     .addSeparator()
-    .addItem('Kimenő fejléc adatok letöltése (Digest API)…', 'menuOsaQueryInvoiceDigestOutbound')
-    .addItem('Kimenő tételek letöltése (teljes letöltés API)…', 'menuOsaDownloadMissingDetailsOutbound')
-    .addSeparator()
-    .addItem('Egy számla kézi lekérdezése és pdf', 'menuQuerySingleInvoice')
-    .addItem('NAV adatkapcsolat létrehozás', 'menuSetupNavConnection')
-    .addItem('NAV kapcsolat teszt', 'menuTestConnection')
-    .addSeparator()
-    .addItem('xls adatok hozzáfűzése és feldolgozása', 'appendXLSXDataToGoogleSheet')
+    .addItem('XLS adatok importálása és feldolgozása', 'appendXLSXDataToGoogleSheet')
     .addItem('Költségtípusok frissítése', 'runCategoryUpdateFromMenu')
+    .addSeparator()
+    .addItem('NAV kapcsolat beállítása (+ teszt + automatizálás)', 'menuSetupNavConnection')
+    .addItem('NAV kapcsolat teszt', 'menuTestConnection')
+    .addItem('Automatikus szinkron időzítése…', 'menuSetupTriggers')
     .addSeparator()
     .addItem('Minden adat és állapot törlése', 'clearAllData')
     .addToUi();
 
-  ui.createMenu('eÁFA vámhatározatok')
-    .addItem('Határozat lista letöltése (Digest)…', 'menuEVatVamQueryDigest')
-    .addItem('Részletek letöltése (hiányzó XML adatok)…', 'menuEVatVamDownloadMissing')
-    .addToUi();
-
-  ui.createMenu('NAV pénztárgép (OPG)')
-    .addItem('Nyugta lekérdezés (default 14 nap)…', 'menuOpgQuerySync')
+  ui.createMenu('Vám és OPG')
+    .addItem('eÁFA vámhatározatok szinkronizálása…', 'menuEVatVamQueryDigest')
     .addSeparator()
+    .addItem('NAV pénztárgép (OPG) szinkronizálása (default 14 nap)…', 'menuOpgQuerySync')
     .addItem('OPG sheetek létrehozása', 'menuOpgEnsureSheets')
-    .addItem('Minden OPG adat törlése', 'menuOpgClearData')
     .addSeparator()
     .addItem('Teszt környezet ellenőrzés…', 'menuOpgTestEnvironment')
     .addItem('Tesztadat generálás (test env)…', 'menuOpgGenerateTestData')
+    .addSeparator()
+    .addItem('Minden OPG adat törlése', 'menuOpgClearData')
     .addToUi();
 }
 
@@ -70,20 +65,20 @@ function openSyncDialog(syncType, direction) {
     ctx = getDateBoundaries({ sheetName: OPG_SHEET_FEJLEC, dateColumnHeader: 'Kiállítás ideje' });
   }
 
-  var p         = PropertiesService.getScriptProperties();
+  var p = PropertiesService.getScriptProperties();
   var extraDays = p.getProperty('BEFORE_AFTER_EXTRA_DAYS') || '30';
-  var propStart = p.getProperty('START_DATE')              || '';
-  var propEnd   = p.getProperty('END_DATE')                || '';
+  var propStart = p.getProperty('START_DATE') || '';
+  var propEnd = p.getProperty('END_DATE') || '';
 
   var tpl = HtmlService.createTemplateFromFile('SyncDateDialog');
-  tpl.syncType   = syncType;
-  tpl.queryFrom  = ctx.queryFrom;
-  tpl.queryTo    = ctx.queryTo;
+  tpl.syncType = syncType;
+  tpl.queryFrom = ctx.queryFrom;
+  tpl.queryTo = ctx.queryTo;
   tpl.filterFrom = ctx.filterFrom;
-  tpl.filterTo   = ctx.filterTo;
-  tpl.extraDays  = extraDays;
-  tpl.propStart  = propStart;
-  tpl.propEnd    = propEnd;
+  tpl.filterTo = ctx.filterTo;
+  tpl.extraDays = extraDays;
+  tpl.propStart = propStart;
+  tpl.propEnd = propEnd;
 
   var html = tpl.evaluate().setWidth(520).setHeight(360);
   SpreadsheetApp.getUi().showModalDialog(html, 'NAV szinkronizálás — időszak beállítása');

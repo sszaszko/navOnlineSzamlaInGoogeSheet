@@ -68,6 +68,49 @@
     text-align: center; padding: 40px 16px; color: #5f6368;
     font-size: 14px;
   }
+
+  /* Automation view */
+  #automation-view { display: none; }
+  .section-label {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .5px; color: #5f6368; margin: 14px 0 6px 0;
+  }
+  .auto-row { display: flex; gap: 12px; margin-bottom: 8px; }
+  .auto-row .field { flex: 1; margin-bottom: 0; }
+  .auto-row label { font-size: 12px; color: #3c4043; margin-bottom: 3px; }
+  input[type=date], input[type=time], select {
+    width: 100%; padding: 6px 8px; border: 1px solid #dadce0;
+    border-radius: 4px; font-size: 13px; font-family: inherit;
+    color: #202124; background: #fff; box-sizing: border-box;
+  }
+  input[type=date]:focus, input[type=time]:focus, select:focus {
+    outline: none; border-color: #1a73e8; box-shadow: 0 0 0 2px #e8f0fe;
+  }
+  .task-block {
+    border: 1px solid #e8eaed; border-radius: 6px;
+    padding: 10px 12px; margin-bottom: 8px; background: #fafafa;
+  }
+  .task-title {
+    font-weight: 500; font-size: 13px; color: #202124;
+    margin-bottom: 8px;
+  }
+  .task-grid { display: flex; gap: 12px; }
+  .task-grid .field { flex: 1; }
+  .auto-info {
+    background: #e8f0fe; border-left: 3px solid #1a73e8;
+    padding: 8px 10px; border-radius: 0 4px 4px 0;
+    font-size: 12px; color: #174ea6; margin-bottom: 12px; line-height: 1.5;
+  }
+  .cutoff-warn {
+    background: #fef7e0; border-left: 3px solid #f29900;
+    padding: 10px 12px; border-radius: 0 4px 4px 0;
+    font-size: 12px; color: #5f4500; margin-bottom: 12px; line-height: 1.5;
+    display: none;
+  }
+  .cutoff-warn.active { display: block; }
+  .cutoff-warn.error  {
+    background: #fce8e6; border-left-color: #c5221f; color: #c5221f;
+  }
 </style>
 </head>
 <body>
@@ -126,13 +169,99 @@
   <div id="big-status"></div>
   <div class="result-detail" id="result-detail"></div>
   <div class="actions" style="text-align:center;">
-    <button type="button" class="primary" onclick="google.script.host.close()">Bezárás</button>
+    <button type="button" class="secondary" onclick="google.script.host.close()">Bezárás</button>
+    <button type="button" class="primary" id="continueBtn"
+            style="display:none;" onclick="goToAutomation()">
+      Tovább az időzítések beállításához →
+    </button>
+  </div>
+</div>
+
+<div id="automation-view">
+  <h2>Automatizálás beállítása</h2>
+  <p class="intro">
+    Add meg a könyvelési időszakot, a munkaidő határait és a négy automatikus
+    szinkronfeladat futási gyakoriságát. A mentés után a rendszer azonnal felépíti
+    a triggereket és elindítja az aktuális műszakot.
+  </p>
+
+  <div id="cutoff-warn" class="cutoff-warn"></div>
+
+  <div class="section-label">Könyvelési időszak (Script Property)</div>
+  <div class="auto-row">
+    <div class="field">
+      <label for="startDate">START_DATE</label>
+      <input type="date" id="startDate">
+    </div>
+    <div class="field">
+      <label for="endDate">END_DATE</label>
+      <input type="date" id="endDate">
+    </div>
+  </div>
+
+  <div class="section-label">Munkaidő határai</div>
+  <div class="auto-row">
+    <div class="field">
+      <label for="workStart">Kezdete (OO:PP)</label>
+      <input type="time" id="workStart" step="60">
+    </div>
+    <div class="field">
+      <label for="workEnd">Vége (OO:PP)</label>
+      <input type="time" id="workEnd" step="60">
+    </div>
+  </div>
+
+  <div class="section-label">Időzített futtatások</div>
+  <div class="auto-info">
+    A „munkaidőben” oszlop a nappali műszakra, a „munkaidőn kívül” az éjszakai
+    műszakra vonatkozik. A két műszakot a Google triggerek napi szinten váltják
+    automatikusan a fenti munkaidő alapján.
+  </div>
+
+  <div id="tasks-container"></div>
+
+  <div id="auto-message" style="display:none; margin-top:10px; padding:8px 12px;
+       border-radius:4px; font-size:12px;"></div>
+
+  <div class="actions" style="justify-content:space-between;">
+    <button type="button" id="deleteAllBtn"
+            onclick="onDeleteAllTriggers()"
+            style="background:#fce8e6; color:#c5221f; border:1px solid #f5c1bb;
+                   font-size:12px; padding:6px 12px;">
+      ⚠ Minden trigger törlése
+    </button>
+    <div style="display:flex; gap:8px;">
+      <button type="button" class="secondary"
+              onclick="google.script.host.close()">Mégse</button>
+      <button type="button" class="primary" id="autoSaveBtn"
+              onclick="onSaveAutomation()">Mentés és időzítők létrehozása</button>
+    </div>
   </div>
 </div>
 
 <script>
-  var INIT_MODE = '<?= mode ?>'; // 'setup' vagy 'testOnly'
+  var INIT_MODE = '<?= mode ?>'; // 'setup' | 'testOnly' | 'triggersOnly'
   var FIELDS = ['NAV_LOGIN','NAV_PASSWORD','NAV_TAX_NUMBER','NAV_SIGNATURE_KEY','NAV_EXCHANGE_KEY'];
+
+  // Időzítő opciók — kulcs = TriggerShiftManager NATIVE_INTERVALS érték
+  var WORK_TIME_OPTIONS = [
+    { v: 'none',            t: 'Kikapcsolva' },
+    { v: 'every5minutes',   t: '5 percenként' },
+    { v: 'every10minutes',  t: '10 percenként' },
+    { v: 'every15minutes',  t: '15 percenként' },
+    { v: 'every30minutes',  t: '30 percenként' },
+    { v: 'every1hour',      t: 'Óránként (60 perc)' },
+    { v: 'every2hours',     t: '2 óránként (120 perc)' },
+    { v: 'every4hours',     t: '4 óránként (240 perc)' }
+  ];
+  var OFF_WORK_OPTIONS = [
+    { v: 'none',         t: 'Kikapcsolva' },
+    { v: 'every1hour',   t: 'Óránként (1h)' },
+    { v: 'every2hours',  t: '2 óránként (2h)' },
+    { v: 'every4hours',  t: '4 óránként (4h)' },
+    { v: 'every8hours',  t: '8 óránként (8h)' },
+    { v: 'atHour(21)',   t: 'Naponta egyszer 21:00-kor' }
+  ];
 
   function setStatus(key, state) {
     var statusEl = document.getElementById('status_' + key);
@@ -173,6 +302,10 @@
         okHtml += '<div class="result-meta">Válaszidő: ' + esc(t.elapsedMs) + ' ms — HTTP ' + esc(t.httpCode || '?') + '</div>';
       }
       detailEl.innerHTML = okHtml;
+      // Sikeres teszt setup módban → felajánljuk az időzítések beállítását
+      if (INIT_MODE === 'setup') {
+        document.getElementById('continueBtn').style.display = 'inline-block';
+      }
     } else {
       bigEl.className = 'result-big-error';
       bigEl.textContent = 'Kapcsolat HIBA ✗';
@@ -265,6 +398,8 @@
     if (INIT_MODE === 'testOnly') {
       document.getElementById('result-view').style.display = 'block';
       runTestOnly();
+    } else if (INIT_MODE === 'triggersOnly') {
+      goToAutomation();
     } else {
       document.getElementById('form-view').style.display = 'block';
       loadState();
@@ -291,6 +426,183 @@
         document.getElementById('saveBtn').disabled = false;
       })
       .saveNavConnection(data);
+  }
+
+  // ── Automation view (3. lépés) ────────────────────────────
+
+  function buildSelect(id, options, selectedVal) {
+    var html = '<select id="' + id + '">';
+    for (var i = 0; i < options.length; i++) {
+      var o = options[i];
+      var sel = (o.v === selectedVal) ? ' selected' : '';
+      html += '<option value="' + o.v + '"' + sel + '>' + o.t + '</option>';
+    }
+    html += '</select>';
+    return html;
+  }
+
+  function renderTasks(tasks) {
+    var html = '';
+    for (var i = 0; i < tasks.length; i++) {
+      var t = tasks[i];
+      html +=
+        '<div class="task-block" data-fn="' + t.fn + '">' +
+          '<div class="task-title">' + t.label +
+            ' <span style="color:#5f6368;font-weight:400;font-size:11px;">(' + t.fn + ')</span>' +
+          '</div>' +
+          '<div class="task-grid">' +
+            '<div class="field">' +
+              '<label>Munkaidőben</label>' +
+              buildSelect('wt_' + t.fn, WORK_TIME_OPTIONS, t.work_time) +
+            '</div>' +
+            '<div class="field">' +
+              '<label>Munkaidőn kívül</label>' +
+              buildSelect('ow_' + t.fn, OFF_WORK_OPTIONS, t.off_work) +
+            '</div>' +
+          '</div>' +
+        '</div>';
+    }
+    document.getElementById('tasks-container').innerHTML = html;
+  }
+
+  function showAutoMessage(text, type) {
+    var el = document.getElementById('auto-message');
+    if (!text) { el.style.display = 'none'; return; }
+    el.textContent = text;
+    el.style.display = 'block';
+    if (type === 'success') {
+      el.style.background = '#e6f4ea'; el.style.color = '#137333';
+    } else if (type === 'error') {
+      el.style.background = '#fce8e6'; el.style.color = '#c5221f';
+    } else {
+      el.style.background = '#e8f0fe'; el.style.color = '#174ea6';
+    }
+  }
+
+  function renderCutoffWarning(cutoff, daysAfterEnd) {
+    var el = document.getElementById('cutoff-warn');
+    if (!el) return;
+    var days = (daysAfterEnd != null) ? daysAfterEnd : 30;
+
+    if (cutoff && cutoff.active) {
+      el.className = 'cutoff-warn active error';
+      el.innerHTML =
+        '<b>⚠ Az automatikus szinkronok jelenleg <u>nem futnak</u>.</b><br>' +
+        'A beállított END_DATE (<b>' + cutoff.endDate + '</b>) óta több mint ' +
+        days + ' nap telt el (cutoff dátum: <b>' + cutoff.cutoffDate + '</b>). ' +
+        'A 4 trigger-végpont (osaAutoSync / -Outbound / eVatVamAutoSync / opgAutoSync) ' +
+        'belépéskor azonnal kilép. Állítsd át az END_DATE-et későbbi dátumra a folytatáshoz.';
+    } else if (cutoff && cutoff.pastEndDate) {
+      el.className = 'cutoff-warn active';
+      el.innerHTML =
+        'Az automatikus szinkronok az END_DATE (<b>' + cutoff.endDate + '</b>) után ' +
+        days + ' nappal (<b>' + cutoff.cutoffDate + '</b>) leállnak — ' +
+        'addig minden ütemezett feladat normálisan fut.';
+    } else {
+      el.className = 'cutoff-warn'; el.innerHTML = '';
+    }
+  }
+
+  function goToAutomation() {
+    document.getElementById('result-view').style.display = 'none';
+    document.getElementById('automation-view').style.display = 'block';
+    showAutoMessage('Beállítások betöltése…', 'info');
+
+    google.script.run
+      .withSuccessHandler(function (cfg) {
+        document.getElementById('startDate').value = cfg.startDate || '';
+        document.getElementById('endDate').value   = cfg.endDate   || '';
+        document.getElementById('workStart').value = cfg.workStart || '08:00';
+        document.getElementById('workEnd').value   = cfg.workEnd   || '17:00';
+        renderTasks(cfg.tasks || []);
+        renderCutoffWarning(cfg.cutoff, cfg.cutoffDaysAfterEnd);
+        showAutoMessage('', null);
+      })
+      .withFailureHandler(function (err) {
+        showAutoMessage('Betöltési hiba: ' + (err && err.message ? err.message : err), 'error');
+      })
+      .getAutomationConfig();
+  }
+
+  function onSaveAutomation() {
+    var startDate = document.getElementById('startDate').value;
+    var endDate   = document.getElementById('endDate').value;
+    var workStart = document.getElementById('workStart').value;
+    var workEnd   = document.getElementById('workEnd').value;
+
+    if (!workStart || !workEnd) {
+      showAutoMessage('A munkaidő mezőket ki kell tölteni.', 'error');
+      return;
+    }
+    if (workStart >= workEnd) {
+      showAutoMessage('A munkaidő kezdete kisebb kell legyen, mint a vége.', 'error');
+      return;
+    }
+    if (startDate && endDate && startDate > endDate) {
+      showAutoMessage('A könyvelési kezdő dátum nem lehet nagyobb a záró dátumnál.', 'error');
+      return;
+    }
+
+    // Tasks összegyűjtése a DOM-ból
+    var blocks = document.querySelectorAll('#tasks-container .task-block');
+    var tasks = [];
+    for (var i = 0; i < blocks.length; i++) {
+      var fn = blocks[i].getAttribute('data-fn');
+      tasks.push({
+        fn: fn,
+        work_time: document.getElementById('wt_' + fn).value,
+        off_work:  document.getElementById('ow_' + fn).value
+      });
+    }
+
+    document.getElementById('autoSaveBtn').disabled = true;
+    document.getElementById('deleteAllBtn').disabled = true;
+    showAutoMessage('Beállítások mentése folyamatban…', 'info');
+
+    google.script.run
+      .withSuccessHandler(function (res) {
+        // A backend csak a JSON configot írta a Properties-be és regisztrált
+        // egy egyszeri háttértriggert — a tényleges triggerépítés a háttérben
+        // folyik tovább. Azonnal bezárhatjuk a dialogot.
+        showAutoMessage((res && res.message) || 'Mentve ✓', 'success');
+        setTimeout(function () { google.script.host.close(); }, 1500);
+      })
+      .withFailureHandler(function (err) {
+        showAutoMessage('Hiba: ' + (err && err.message ? err.message : err), 'error');
+        document.getElementById('autoSaveBtn').disabled = false;
+        document.getElementById('deleteAllBtn').disabled = false;
+      })
+      .saveAutomationConfig({
+        startDate: startDate,
+        endDate:   endDate,
+        workStart: workStart,
+        workEnd:   workEnd,
+        tasks:     tasks
+      });
+  }
+
+  function onDeleteAllTriggers() {
+    if (!confirm('Biztos, hogy törölni szeretnéd a projekt MINDEN triggerét ' +
+                 '(műszakváltók, ismétlődő és egyszeri triggerek egyaránt)?\n\n' +
+                 'A művelet nem vonható vissza. Utána semmilyen automatikus ' +
+                 'szinkron nem fut, amíg újra nem mented a beállításokat.')) {
+      return;
+    }
+    document.getElementById('deleteAllBtn').disabled = true;
+    document.getElementById('autoSaveBtn').disabled = true;
+    showAutoMessage('Triggerek törlése folyamatban…', 'info');
+
+    google.script.run
+      .withSuccessHandler(function (res) {
+        showAutoMessage((res && res.message) || 'Triggerek törölve ✓', 'success');
+        setTimeout(function () { google.script.host.close(); }, 1800);
+      })
+      .withFailureHandler(function (err) {
+        showAutoMessage('Hiba: ' + (err && err.message ? err.message : err), 'error');
+        document.getElementById('deleteAllBtn').disabled = false;
+        document.getElementById('autoSaveBtn').disabled = false;
+      })
+      .deleteAllProjectTriggers();
   }
 
   init();

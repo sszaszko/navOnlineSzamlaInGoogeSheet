@@ -23,8 +23,6 @@
 
 function menuOsaQueryInvoiceDigest() { osaMenuPromptAndSync('INBOUND'); }
 function menuOsaQueryInvoiceDigestOutbound() { osaMenuPromptAndSync('OUTBOUND'); }
-function menuOsaDownloadMissingDetails() { osaMenuPromptAndSync('INBOUND'); }
-function menuOsaDownloadMissingDetailsOutbound() { osaMenuPromptAndSync('OUTBOUND'); }
 
 /**
  * SyncDateDialog.html megnyitása számlák szinkronizálásához.
@@ -38,8 +36,14 @@ function osaMenuPromptAndSync(direction) {
 // TIME-DRIVEN TRIGGER VÉGPONTOK
 // ============================================================
 
-function osaAutoSync() { osaSync('INBOUND', null); }
-function osaAutoSyncOutbound() { osaSync('OUTBOUND', null); }
+function osaAutoSync() {
+  if (shouldSkipTriggerByEndDate('osaAutoSync')) return;
+  osaSync('INBOUND', null);
+}
+function osaAutoSyncOutbound() {
+  if (shouldSkipTriggerByEndDate('osaAutoSyncOutbound')) return;
+  osaSync('OUTBOUND', null);
+}
 
 // ============================================================
 // DIALOG BACKEND — SyncDateDialog.html call-backek
@@ -65,12 +69,14 @@ function osaSync(direction, opts) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
 
   Logger.log('[' + tag + '] INDULÁS');
+  ss.toast(dirLabel + ' számlák szinkronizálása indul...', '▶ Szinkron', 5);
 
   var fejlecIssues = dpValidate([
     { sheet: cfg.sheetFejlec, headers: ['Számla sorszáma', 'Tételek LETÖLTVE'] }
   ], null);
   if (fejlecIssues.length > 0) {
     Logger.log('[' + tag + '] Leállás: ' + fejlecIssues.join(' | '));
+    ss.toast('Leállás — hiányzó fejléc: ' + fejlecIssues.join(' | '), '✖ Hiba', 10);
     return;
   }
 
@@ -93,11 +99,18 @@ function osaSync(direction, opts) {
   var filter = { filterFrom: bounds.filterFrom, filterTo: bounds.filterTo };
 
   try {
+    ss.toast('Fejléc letöltése (' + bounds.queryFrom + ' – ' + bounds.queryTo + ')...',
+      '⏳ Digest API', 10);
     var rows = osaQueryInvoiceDigest({
       dateFrom: bounds.queryFrom, dateTo: bounds.queryTo, invoiceDirection: direction
     });
+    ss.toast('NAV-tól ' + rows.length + ' fejléc megérkezett. Sheet írás...',
+      '⏳ Fejléc mentés', 8);
+
     var writtenFejlec = osaWriteFejlecRows(rows, direction, filter);
     Logger.log('[' + tag + '] Digest KÉSZ. Új fejlécek: ' + writtenFejlec + ' / ' + rows.length);
+    ss.toast(writtenFejlec + ' új fejléc beírva (' + rows.length + ' közül). Tételek következnek...',
+      '✔ Fejléc kész', 8);
 
     osaDownloadMissingDetails(direction, writtenFejlec);
   } catch (e) {
@@ -163,16 +176,23 @@ function osaDownloadMissingDetails(direction, writtenFejlec) {
     return;
   }
 
-  Logger.log('[' + tag + '] ' + pending.length + ' számla tételeinek letöltése...');
-  ss.toast(pending.length + ' db hiányzó tétel letöltése indul...', 'Folyamatban', 5);
+  var totalBatches = Math.ceil(pending.length / OSA_BATCH_SIZE);
+  Logger.log('[' + tag + '] ' + pending.length + ' számla tételeinek letöltése (' + totalBatches + ' batch)...');
+  ss.toast(pending.length + ' db hiányzó tétel letöltése indul (' + totalBatches +
+    ' batch, ' + OSA_BATCH_SIZE + '/batch)...', '⏳ Tétel letöltés', 8);
 
   var ok = 0, fail = 0;
   var batchState = null;  // fejlec+tetel adatok cache-je batch-ek között
+  var batchNo = 0;
 
   // End-to-end batchek: letölt N-et → azonnal ír → letölt következő N-et → ír...
   for (var i = 0; i < pending.length; i += OSA_BATCH_SIZE) {
     var chunkKeys = pending.slice(i, i + OSA_BATCH_SIZE);
     var processed = Math.min(i + OSA_BATCH_SIZE, pending.length);
+    batchNo++;
+
+    ss.toast('Batch ' + batchNo + '/' + totalBatches + ' — ' + chunkKeys.length +
+      ' számla XML letöltése NAV-tól...', '⏳ Letöltés', 15);
 
     var paramsArray = [];
     for (var k = 0; k < chunkKeys.length; k++) {
@@ -188,22 +208,28 @@ function osaDownloadMissingDetails(direction, writtenFejlec) {
       }
     } catch (e) {
       Logger.log('[' + tag + '] Batch letöltési hiba: ' + e.message);
+      ss.toast('Batch ' + batchNo + ' letöltési hiba: ' + e.message, '⚠ Hiba', 8);
       fail += chunkKeys.length;
     }
 
     if (chunkResults.length > 0) {
       Logger.log('[' + tag + '] Batch kiírása: ' + processed + ' / ' + pending.length);
-      ss.toast('Feldolgozás: ' + processed + ' / ' + pending.length + '...', 'Folyamatban', 15);
+      ss.toast('Batch ' + batchNo + '/' + totalBatches + ' — kiírás sheetbe (' +
+        processed + '/' + pending.length + ' számla)...', '⏳ Sheet írás', 15);
       try {
         batchState = osaProcessInvoiceDataBatch(chunkResults, direction, batchState);
       } catch (e) {
         Logger.log('[' + tag + '] Batch kiírási hiba: ' + e.message);
+        ss.toast('Batch ' + batchNo + ' kiírási hiba: ' + e.message, '⚠ Hiba', 8);
         batchState = null;  // hiba után következő batch frissen olvas
       }
     }
   }
 
-  if ((ok > 0 || wFejlec > 0) && direction === 'INBOUND') postProcessSheets();
+  if ((ok > 0 || wFejlec > 0) && direction === 'INBOUND') {
+    ss.toast('Utófeldolgozás (duplikátum, rendezés, kategória)...', '⏳ Post-process', 8);
+    postProcessSheets();
+  }
 
   var summary = dirLabel + ': ' + (wFejlec > 0 ? wFejlec + ' fejléc, ' : '') + ok + ' tétel letöltve' +
     (fail > 0 ? ', ' + fail + ' hiba (ld. Naplók)' : '') + '.';
@@ -251,15 +277,24 @@ function menuQuerySingleInvoice() {
   if (!invoiceNumber) return;
 
   try {
+    ss.toast(invoiceNumber + ' lekérése NAV-tól...', '⏳ Számla', 10);
     var result = osaQueryInvoiceData({ invoiceNumber: invoiceNumber, invoiceDirection: direction });
+
+    ss.toast('Tételek írása sheetbe...', '⏳ Tétel mentés', 5);
     osaWriteTetelRows(result, direction);
+
+    ss.toast('Fejléc XML-alapú frissítése...', '⏳ Fejléc update', 5);
     osaUpdateFejlecFromInvoiceXml(result, direction);
+
+    ss.toast('Tételek dátum-backfill...', '⏳ Tétel update', 5);
     osaUpdateTetelekFromInvoiceXml(result, direction);
 
-    // Pdf generálás meghívása
+    ss.toast('PDF generálása...', '⏳ PDF', 5);
     generateInvoicePdf(result);
 
+    ss.toast(invoiceNumber + ' lekérve és feldolgozva.', '✔ Kész', 8);
   } catch (e) {
+    ss.toast('Hiba: ' + e.message, '✖ Hiba', 10);
     ui.alert('Hiba!\n\n' + e.message);
   }
 }

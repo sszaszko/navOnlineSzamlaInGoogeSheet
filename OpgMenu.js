@@ -84,6 +84,7 @@ function menuOpgQuerySync() {
 
 function opgAutoSync(opts) {
   var tag = 'opgAutoSync';
+  if (!opts && shouldSkipTriggerByEndDate(tag)) return;
   var ss  = SpreadsheetApp.getActiveSpreadsheet();
   Logger.log('[' + tag + '] INDULÁS');
 
