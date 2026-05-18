@@ -270,8 +270,10 @@ function osaResolveAmountsHUF(lineEl) {
     var vatC      = parseFloat(navXmlText(lineEl, 'lineAmountsSimplified lineVatRate vatContent'));
     if (!isNaN(grossSimp) && !isNaN(vatC) && vatC > 0) {
       gross = grossSimp;
-      net   = Math.round(gross / (1 + vatC) * 100) / 100;
-      vat   = Math.round((gross - net)      * 100) / 100;
+      // vatContent = áfa/bruttó arány (pl. 0.2126 = 27%-os áfa esetén)
+      // Helyes: vat = gross × vatC; net = gross - vat  (osaResolveAmounts-szal konzisztens)
+      vat   = Math.round(gross * vatC * 100) / 100;
+      net   = Math.round((gross - vat)  * 100) / 100;
     }
   }
 

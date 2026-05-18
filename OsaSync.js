@@ -21,9 +21,9 @@
 // MENÜ HANDLEREK — vékony wrapperek
 // ============================================================
 
-function menuOsaQueryInvoiceDigest()             { osaMenuPromptAndSync('INBOUND'); }
-function menuOsaQueryInvoiceDigestOutbound()     { osaMenuPromptAndSync('OUTBOUND'); }
-function menuOsaDownloadMissingDetails()         { osaMenuPromptAndSync('INBOUND'); }
+function menuOsaQueryInvoiceDigest() { osaMenuPromptAndSync('INBOUND'); }
+function menuOsaQueryInvoiceDigestOutbound() { osaMenuPromptAndSync('OUTBOUND'); }
+function menuOsaDownloadMissingDetails() { osaMenuPromptAndSync('INBOUND'); }
 function menuOsaDownloadMissingDetailsOutbound() { osaMenuPromptAndSync('OUTBOUND'); }
 
 /**
@@ -38,14 +38,14 @@ function osaMenuPromptAndSync(direction) {
 // TIME-DRIVEN TRIGGER VÉGPONTOK
 // ============================================================
 
-function osaAutoSync()         { osaSync('INBOUND',  null); }
+function osaAutoSync() { osaSync('INBOUND', null); }
 function osaAutoSyncOutbound() { osaSync('OUTBOUND', null); }
 
 // ============================================================
 // DIALOG BACKEND — SyncDateDialog.html call-backek
 // ============================================================
 
-function dialogRunSyncInvoiceIn(opts)  { osaSync('INBOUND',  opts); }
+function dialogRunSyncInvoiceIn(opts) { osaSync('INBOUND', opts); }
 function dialogRunSyncInvoiceOut(opts) { osaSync('OUTBOUND', opts); }
 
 // ============================================================
@@ -60,9 +60,9 @@ function dialogRunSyncInvoiceOut(opts) { osaSync('OUTBOUND', opts); }
  */
 function osaSync(direction, opts) {
   var dirLabel = direction === 'OUTBOUND' ? 'KIMENŐ' : 'BEJÖVŐ';
-  var cfg      = osaDirCfg(direction);
-  var tag      = 'osaSync[' + dirLabel + ']';
-  var ss       = SpreadsheetApp.getActiveSpreadsheet();
+  var cfg = osaDirCfg(direction);
+  var tag = 'osaSync[' + dirLabel + ']';
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
 
   Logger.log('[' + tag + '] INDULÁS');
 
@@ -76,17 +76,19 @@ function osaSync(direction, opts) {
 
   var bounds;
   if (opts && opts.dateFrom && opts.dateTo) {
-    bounds = { queryFrom: opts.dateFrom, queryTo: opts.dateTo,
-               filterFrom: opts.filterFrom !== undefined ? opts.filterFrom : null,
-               filterTo:   opts.filterTo   !== undefined ? opts.filterTo   : null };
+    bounds = {
+      queryFrom: opts.dateFrom, queryTo: opts.dateTo,
+      filterFrom: opts.filterFrom !== undefined ? opts.filterFrom : null,
+      filterTo: opts.filterTo !== undefined ? opts.filterTo : null
+    };
   } else {
     bounds = getDateBoundaries({
-      sheetName:        cfg.sheetFejlec,
+      sheetName: cfg.sheetFejlec,
       dateColumnHeader: 'Számla kelte'
     });
   }
   Logger.log('[' + tag + '] queryFrom=' + bounds.queryFrom + ' queryTo=' + bounds.queryTo +
-             ' | filterFrom=' + bounds.filterFrom + ' filterTo=' + bounds.filterTo);
+    ' | filterFrom=' + bounds.filterFrom + ' filterTo=' + bounds.filterTo);
 
   var filter = { filterFrom: bounds.filterFrom, filterTo: bounds.filterTo };
 
@@ -117,7 +119,7 @@ function osaSync(direction, opts) {
  */
 function osaDownloadMissingDetails(direction, writtenFejlec) {
   var tag = 'osaDownloadMissingDetails[' + direction + ']';
-  var ss  = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
   var cfg = osaDirCfg(direction);
   var dirLabel = direction === 'OUTBOUND' ? 'Kimenő' : 'Bejövő';
   var wFejlec = writtenFejlec || 0;
@@ -127,9 +129,9 @@ function osaDownloadMissingDetails(direction, writtenFejlec) {
     ss.toast('Még nem létezik a fejlécek lapja.', 'Hiba', 5);
     return;
   }
-  var hMap    = dpGetHeaderMap(fejSh);
-  var keyCol  = hMap['Számla sorszáma'];
-  var dlCol   = hMap['Tételek LETÖLTVE'];
+  var hMap = dpGetHeaderMap(fejSh);
+  var keyCol = hMap['Számla sorszáma'];
+  var dlCol = hMap['Tételek LETÖLTVE'];
   var lastRow = fejSh.getLastRow();
 
   if (lastRow < 2) {
@@ -137,10 +139,10 @@ function osaDownloadMissingDetails(direction, writtenFejlec) {
     return;
   }
 
-  var data    = fejSh.getRange(2, 1, lastRow - 1, fejSh.getLastColumn()).getValues();
+  var data = fejSh.getRange(2, 1, lastRow - 1, fejSh.getLastColumn()).getValues();
   var pending = [];
   for (var i = 0; i < data.length; i++) {
-    var dl  = String(data[i][dlCol - 1]).trim();
+    var dl = String(data[i][dlCol - 1]).trim();
     var num = String(data[i][keyCol - 1]).trim();
     if (num && (dl === '' || dl === 'n/a')) pending.push(num);
   }
@@ -165,6 +167,7 @@ function osaDownloadMissingDetails(direction, writtenFejlec) {
   ss.toast(pending.length + ' db hiányzó tétel letöltése indul...', 'Folyamatban', 5);
 
   var ok = 0, fail = 0;
+  var batchState = null;  // fejlec+tetel adatok cache-je batch-ek között
 
   // End-to-end batchek: letölt N-et → azonnal ír → letölt következő N-et → ír...
   for (var i = 0; i < pending.length; i += OSA_BATCH_SIZE) {
@@ -192,9 +195,10 @@ function osaDownloadMissingDetails(direction, writtenFejlec) {
       Logger.log('[' + tag + '] Batch kiírása: ' + processed + ' / ' + pending.length);
       ss.toast('Feldolgozás: ' + processed + ' / ' + pending.length + '...', 'Folyamatban', 15);
       try {
-        osaProcessInvoiceDataBatch(chunkResults, direction);
+        batchState = osaProcessInvoiceDataBatch(chunkResults, direction, batchState);
       } catch (e) {
         Logger.log('[' + tag + '] Batch kiírási hiba: ' + e.message);
+        batchState = null;  // hiba után következő batch frissen olvas
       }
     }
   }
@@ -202,7 +206,7 @@ function osaDownloadMissingDetails(direction, writtenFejlec) {
   if ((ok > 0 || wFejlec > 0) && direction === 'INBOUND') postProcessSheets();
 
   var summary = dirLabel + ': ' + (wFejlec > 0 ? wFejlec + ' fejléc, ' : '') + ok + ' tétel letöltve' +
-                (fail > 0 ? ', ' + fail + ' hiba (ld. Naplók)' : '') + '.';
+    (fail > 0 ? ', ' + fail + ' hiba (ld. Naplók)' : '') + '.';
   Logger.log('[' + tag + '] ÖSSZEGZÉS: ' + summary);
   ss.toast(summary, '✔ Szinkron kész', 10);
 }
@@ -218,7 +222,7 @@ function menuQuerySingleInvoice() {
   var activeCell = sheet.getActiveCell();
 
   var direction = 'INBOUND';
-  var cfg       = osaDirCfg(direction);
+  var cfg = osaDirCfg(direction);
 
   // Csak a tétel sheet a kötelező — ott biztos lesz beleírás.
   // A fejléc update (osaUpdateFejlecFromInvoiceXml) csendben kihagyja,

@@ -99,9 +99,24 @@ var OSA_FEJLEC_MEZO_ERTEKEK_INVOICEDATA = {
   'Kisadózó jelölése':                             function(h) { return osaBoolHu(navXmlText(h, 'smallBusinessIndicator')); },
   'Pénzforgalmi elszámolás jelölése':              function(h) { return osaBoolHu(navXmlText(h, 'cashAccountingIndicator')); },
   'Számla nettó (forintban)':                      function(h, r) {
-    if (navXmlText(h, 'invoiceDetail invoiceCategory') !== 'SIMPLIFIED') return '';
-    var sum = 0;
-    var lines = navFindAll(r, 'line');
+    var cat = navXmlText(h, 'invoiceDetail invoiceCategory');
+    if (cat !== 'SIMPLIFIED' && cat !== 'AGGREGATE') return '';
+    // AGGREGATE: summaryNormal/invoiceNetAmountHUF
+    var v = osaNumParse(navXmlText(r, 'invoiceSummary summaryNormal invoiceNetAmountHUF'));
+    if (v !== '') return v;
+    // SIMPLIFIED: summarySimplified bejegyzésekből: nettó = vatContentGrossAmountHUF × (1 - vatContent)
+    var entries = navFindAll(r, 'summarySimplified');
+    if (entries.length > 0) {
+      var tot = 0;
+      for (var i = 0; i < entries.length; i++) {
+        var g = parseFloat(navXmlText(entries[i], 'vatContentGrossAmountHUF'));
+        var c = parseFloat(navXmlText(entries[i], 'vatContent'));
+        if (!isNaN(g) && !isNaN(c)) tot += g * (1 - c);
+      }
+      return Math.round(tot * 100) / 100;
+    }
+    // Fallback: tételek összege
+    var sum = 0, lines = navFindAll(r, 'line');
     for (var i = 0; i < lines.length; i++) {
       var val = osaResolveAmountsHUF(lines[i]).net;
       if (typeof val === 'number') sum += val;
@@ -109,9 +124,22 @@ var OSA_FEJLEC_MEZO_ERTEKEK_INVOICEDATA = {
     return sum === 0 && lines.length === 0 ? '' : Math.round(sum * 100) / 100;
   },
   'Számla ÁFA összege (forintban)':                function(h, r) {
-    if (navXmlText(h, 'invoiceDetail invoiceCategory') !== 'SIMPLIFIED') return '';
-    var sum = 0;
-    var lines = navFindAll(r, 'line');
+    var cat = navXmlText(h, 'invoiceDetail invoiceCategory');
+    if (cat !== 'SIMPLIFIED' && cat !== 'AGGREGATE') return '';
+    var v = osaNumParse(navXmlText(r, 'invoiceSummary summaryNormal invoiceVatAmountHUF'));
+    if (v !== '') return v;
+    // SIMPLIFIED: áfa = vatContentGrossAmountHUF × vatContent
+    var entries = navFindAll(r, 'summarySimplified');
+    if (entries.length > 0) {
+      var tot = 0;
+      for (var i = 0; i < entries.length; i++) {
+        var g = parseFloat(navXmlText(entries[i], 'vatContentGrossAmountHUF'));
+        var c = parseFloat(navXmlText(entries[i], 'vatContent'));
+        if (!isNaN(g) && !isNaN(c)) tot += g * c;
+      }
+      return Math.round(tot * 100) / 100;
+    }
+    var sum = 0, lines = navFindAll(r, 'line');
     for (var i = 0; i < lines.length; i++) {
       var val = osaResolveAmountsHUF(lines[i]).vat;
       if (typeof val === 'number') sum += val;
@@ -119,16 +147,56 @@ var OSA_FEJLEC_MEZO_ERTEKEK_INVOICEDATA = {
     return sum === 0 && lines.length === 0 ? '' : Math.round(sum * 100) / 100;
   },
   'Számla bruttó (forintban)':                     function(h, r) {
-    if (navXmlText(h, 'invoiceDetail invoiceCategory') !== 'SIMPLIFIED') return '';
-    var gross = osaNumParse(navXmlText(r, 'invoiceSummary summaryGrossData invoiceGrossAmountHUF'));
-    if (gross !== '') return gross;
-    var sum = 0;
-    var lines = navFindAll(r, 'line');
+    var cat = navXmlText(h, 'invoiceDetail invoiceCategory');
+    if (cat !== 'SIMPLIFIED' && cat !== 'AGGREGATE') return '';
+    var v = osaNumParse(navXmlText(r, 'invoiceSummary summaryGrossData invoiceGrossAmountHUF'));
+    if (v !== '') return v;
+    var sum = 0, lines = navFindAll(r, 'line');
     for (var i = 0; i < lines.length; i++) {
       var val = osaResolveAmountsHUF(lines[i]).gross;
       if (typeof val === 'number') sum += val;
     }
     return sum === 0 && lines.length === 0 ? '' : Math.round(sum * 100) / 100;
+  },
+  // Devizás összegek — SIMPLIFIED/AGGREGATE esetén a digest nem mindig tartalmazza
+  'Számla nettó összege (a számla pénznemében)':   function(h, r) {
+    var cat = navXmlText(h, 'invoiceDetail invoiceCategory');
+    if (cat !== 'SIMPLIFIED' && cat !== 'AGGREGATE') return '';
+    var v = osaNumParse(navXmlText(r, 'invoiceSummary summaryNormal invoiceNetAmount'));
+    if (v !== '') return v;
+    var entries = navFindAll(r, 'summarySimplified');
+    if (entries.length > 0) {
+      var tot = 0;
+      for (var i = 0; i < entries.length; i++) {
+        var g = parseFloat(navXmlText(entries[i], 'vatContentGrossAmount'));
+        var c = parseFloat(navXmlText(entries[i], 'vatContent'));
+        if (!isNaN(g) && !isNaN(c)) tot += g * (1 - c);
+      }
+      return Math.round(tot * 100) / 100;
+    }
+    return '';
+  },
+  'Számla ÁFA(a számla pénznemében)':              function(h, r) {
+    var cat = navXmlText(h, 'invoiceDetail invoiceCategory');
+    if (cat !== 'SIMPLIFIED' && cat !== 'AGGREGATE') return '';
+    var v = osaNumParse(navXmlText(r, 'invoiceSummary summaryNormal invoiceVatAmount'));
+    if (v !== '') return v;
+    var entries = navFindAll(r, 'summarySimplified');
+    if (entries.length > 0) {
+      var tot = 0;
+      for (var i = 0; i < entries.length; i++) {
+        var g = parseFloat(navXmlText(entries[i], 'vatContentGrossAmount'));
+        var c = parseFloat(navXmlText(entries[i], 'vatContent'));
+        if (!isNaN(g) && !isNaN(c)) tot += g * c;
+      }
+      return Math.round(tot * 100) / 100;
+    }
+    return '';
+  },
+  'Számla bruttó összege (a számla pénznemében)':  function(h, r) {
+    var cat = navXmlText(h, 'invoiceDetail invoiceCategory');
+    if (cat !== 'SIMPLIFIED' && cat !== 'AGGREGATE') return '';
+    return osaNumParse(navXmlText(r, 'invoiceSummary summaryGrossData invoiceGrossAmount'));
   }
 };
 
@@ -197,7 +265,8 @@ var OSA_TETEL_MEZO_ERTEKEK = {
 
   // ─── ÁFA mentesség ─────────────────────────────────────────────────────────
   'Áfamentesség jelölés':                                 function(inv, l, h) {
-    return (navFindFirst(l, 'vatExemption') ? 'Igen' : 'n/a');
+    return (navXmlText(l, 'lineAmountsNormal lineVatRate vatExemption case') ||
+            navXmlText(l, 'vatExemption case')) ? 'Igen' : 'n/a';
   },
   'Áfamentesség esete':                                   function(inv, l, h) {
     return navXmlText(l, 'vatExemption case') || navXmlText(l, 'lineAmountsNormal lineVatRate vatExemption case') || 'n/a';
@@ -206,7 +275,8 @@ var OSA_TETEL_MEZO_ERTEKEK = {
     return navXmlText(l, 'vatExemption reason') || navXmlText(l, 'lineAmountsNormal lineVatRate vatExemption reason') || 'n/a';
   },
   'ÁFA törvény hatályán kívüli jelölés':                  function(inv, l, h) {
-    return (navFindFirst(l, 'vatOutOfScope') ? 'Igen' : 'n/a');
+    return (navXmlText(l, 'vatOutOfScope case') ||
+            navXmlText(l, 'lineAmountsNormal vatOutOfScope case')) ? 'Igen' : 'n/a';
   },
   'ÁFA törvény hatályon kívüliségének esete':             function(inv, l, h) {
     return navXmlText(l, 'vatOutOfScope case') || 'n/a';

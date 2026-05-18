@@ -287,27 +287,41 @@ function osaParseInvoiceRoot(invoiceXml) {
 
 /**
  * BATCH feldolgozó a hiányzó tételek letöltésének felgyorsításához.
- * Egyetlen menetben olvassa be a táblázatokat, gyűjti össze az új tételeket,
- * és frissíti a fejléceket a memóriában, majd egyben menti ki.
+ *
+ * @param {Array}        resultsArray  osaQueryInvoiceDataBatch() eredménye
+ * @param {string}       direction     'INBOUND' | 'OUTBOUND'
+ * @param {Object|null}  cachedState   Előző batch-től megőrzött állapot (null = első hívás).
+ *                                     Tartalmazza: fejSh, tetSh, hMapTet, hMapFej, totTetCols,
+ *                                     totFejCols, tetKey1, tetKey2, fejKey, fejDl,
+ *                                     compositeKeys, fejData, fejIndexMap
+ * @returns {Object}  Frissített cachedState a következő batch-nek.
+ *
+ * Optimalizálások:
+ *   - cachedState: fejlec/tetel adatok egyszer olvasódnak be az első batch-nél,
+ *     ezután batch-ek között memóriában maradnak (nincs ismételt getValues()).
+ *   - navXmlFlatten(lineEl): XmlElement DFS helyett O(1) plain-object lookup
+ *     a tétel-sorok összeállításakor — a bridge-hívások száma N×oszlop→1/sor.
  */
-function osaProcessInvoiceDataBatch(resultsArray, direction) {
+function osaProcessInvoiceDataBatch(resultsArray, direction, cachedState) {
   var tag = '[osaProcessInvoiceDataBatch]';
   var t0 = Date.now();
-  if (!resultsArray || resultsArray.length === 0) return 0;
+  if (!resultsArray || resultsArray.length === 0) return cachedState;
   var cfg = osaDirCfg(direction);
 
-  var fejSh = dpGetOrCreateSheet(cfg.sheetFejlec);
-  var tetSh = dpGetOrCreateSheet(cfg.sheetTetel);
+  // ── Sheet handle-ek (cache-ből vagy frissen) ──────────────────────────────
+  var fejSh = cachedState ? cachedState.fejSh : dpGetOrCreateSheet(cfg.sheetFejlec);
+  var tetSh = cachedState ? cachedState.tetSh : dpGetOrCreateSheet(cfg.sheetTetel);
 
-  var hMapTet = dpGetHeaderMap(tetSh);
-  var totTetCols = tetSh.getLastColumn() || Object.keys(hMapTet).length;
-  var tetKey1 = hMapTet['Számla sorszáma'];
-  var tetKey2 = hMapTet['Tétel sorszáma'];
+  // ── Fejléc map-ok (állandók, cache-ből vagy egyszer betöltve) ─────────────
+  var hMapTet    = cachedState ? cachedState.hMapTet    : dpGetHeaderMap(tetSh);
+  var totTetCols = cachedState ? cachedState.totTetCols : (tetSh.getLastColumn() || Object.keys(hMapTet).length);
+  var tetKey1    = cachedState ? cachedState.tetKey1    : hMapTet['Számla sorszáma'];
+  var tetKey2    = cachedState ? cachedState.tetKey2    : hMapTet['Tétel sorszáma'];
 
-  var hMapFej = dpGetHeaderMap(fejSh);
-  var totFejCols = fejSh.getLastColumn() || Object.keys(hMapFej).length;
-  var fejKey = hMapFej['Számla sorszáma'];
-  var fejDl = hMapFej['Tételek LETÖLTVE'];
+  var hMapFej    = cachedState ? cachedState.hMapFej    : dpGetHeaderMap(fejSh);
+  var totFejCols = cachedState ? cachedState.totFejCols : (fejSh.getLastColumn() || Object.keys(hMapFej).length);
+  var fejKey     = cachedState ? cachedState.fejKey     : hMapFej['Számla sorszáma'];
+  var fejDl      = cachedState ? cachedState.fejDl      : hMapFej['Tételek LETÖLTVE'];
 
   if (!tetKey1 || !tetKey2) throw new Error('Hiányzó fejléc a Tételek lapon.');
   if (!fejKey || !fejDl) throw new Error('Hiányzó fejléc a Fejléc lapon.');
@@ -316,22 +330,36 @@ function osaProcessInvoiceDataBatch(resultsArray, direction) {
     ' (' + fejSh.getLastRow() + ' sor, ' + totFejCols + ' oszlop)' +
     ' | tetSh=' + cfg.sheetTetel + ' (' + tetSh.getLastRow() + ' sor, ' + totTetCols + ' oszlop)');
 
-  // 1. Meglévő tétel-kulcsok beolvasása (csak a két kulcsoszlop)
-  var compositeKeys = dpGetCompositeKeys(tetSh, tetKey1, tetKey2);
-  Logger.log(tag + ' CompositeKeys betöltve: ' + Object.keys(compositeKeys).length +
-    ' meglévő tétel (' + (Date.now() - t0) + 'ms)');
-
-  // 2. Fejlécek olvasása
-  var lastFejRow = fejSh.getLastRow();
-  var fejData = (lastFejRow >= 2)
-    ? fejSh.getRange(2, 1, lastFejRow - 1, totFejCols).getValues()
-    : [];
-  var fejIndexMap = {};
-  for (var k = 0; k < fejData.length; k++) {
-    var num = String(fejData[k][fejKey - 1]).trim();
-    if (num) fejIndexMap[num] = k;
+  // 1. Meglévő tétel-kulcsok (cache-ből vagy egyszer betöltve)
+  var compositeKeys;
+  if (cachedState && cachedState.compositeKeys) {
+    compositeKeys = cachedState.compositeKeys;
+    Logger.log(tag + ' CompositeKeys cache-ből: ' + Object.keys(compositeKeys).length +
+      ' tétel (' + (Date.now() - t0) + 'ms)');
+  } else {
+    compositeKeys = dpGetCompositeKeys(tetSh, tetKey1, tetKey2);
+    Logger.log(tag + ' CompositeKeys betöltve: ' + Object.keys(compositeKeys).length +
+      ' meglévő tétel (' + (Date.now() - t0) + 'ms)');
   }
-  Logger.log(tag + ' Fejléc lap olvasva: ' + fejData.length + ' sor (' + (Date.now() - t0) + 'ms)');
+
+  // 2. Fejlécek (cache-ből vagy egyszer betöltve)
+  var fejData, fejIndexMap;
+  if (cachedState && cachedState.fejData) {
+    fejData     = cachedState.fejData;
+    fejIndexMap = cachedState.fejIndexMap;
+    Logger.log(tag + ' Fejléc lap cache-ből: ' + fejData.length + ' sor (' + (Date.now() - t0) + 'ms)');
+  } else {
+    var lastFejRow = fejSh.getLastRow();
+    fejData = (lastFejRow >= 2)
+      ? fejSh.getRange(2, 1, lastFejRow - 1, totFejCols).getValues()
+      : [];
+    fejIndexMap = {};
+    for (var k = 0; k < fejData.length; k++) {
+      var num = String(fejData[k][fejKey - 1]).trim();
+      if (num) fejIndexMap[num] = k;
+    }
+    Logger.log(tag + ' Fejléc lap olvasva: ' + fejData.length + ' sor (' + (Date.now() - t0) + 'ms)');
+  }
 
   // 3. Egyetlen ciklus: minden XML-t csak egyszer parszolunk, tétel + fejléc egyszerre
   var newTetelRows = [];
@@ -360,31 +388,28 @@ function osaProcessInvoiceDataBatch(resultsArray, direction) {
     }
 
     var tXml = Date.now();
-    var doc, rootEl;
+    var rootObj;
     try {
-      doc = XmlService.parse(res.invoiceXml);
-      rootEl = doc.getRootElement();
+      var doc = XmlService.parse(res.invoiceXml);
+      // EGYETLEN bridge-bejárás: XmlElement-fa → plain JS objektum. Innentől minden
+      // navFindFirst / navFindAll / navXmlText / osaResolveAmounts hívás pure JS,
+      // nulla JS↔Java bridge-overhead — ez a kritikus optimalizáció sok-tételes számlákhoz.
+      rootObj = navElementToObject(doc.getRootElement());
     } catch(e) {
       Logger.log(tag + ' XML parse hiba [' + invNum + ']: ' + e.message);
       xmlNull++;
       continue;
     }
     xmlOk++;
-    var headEl = navFindFirst(rootEl, 'invoiceHead') || rootEl;
-    var lines  = navFindAll(rootEl, 'line');
-    var tParsz = Date.now() - tXml;
+    var headObj = navFindFirst(rootObj, 'invoiceHead') || rootObj;
+    var lineObjs = navFindAll(rootObj, 'line');
+    Logger.log(tag + ' XML[' + invNum + '] parsz: ' + lineObjs.length + ' sor, parse+conv=' + (Date.now() - tXml) + 'ms');
 
-    // DOM → plain JS objektum (egyetlen bejárás; ezután O(1) property access)
-    var tFlat = Date.now();
-    var rootObj = navXmlFlatten(rootEl);
-    var headObj = navXmlFlatten(headEl);
-    Logger.log(tag + ' XML[' + invNum + '] parsz: ' + lines.length + ' sor, parse=' + tParsz + 'ms flatten=' + (Date.now() - tFlat) + 'ms');
-
-    // 3a. Tételsorok
-    for (var j = 0; j < lines.length; j++) {
-      var lineEl = lines[j];
-      var lineObj = navXmlFlatten(lineEl);
-      var lineNum = lineObj.lineNumber ? lineObj.lineNumber._text : '';
+    // 3a. Tételsorok — minden lineObj már plain JS, a field map navXmlText hívásai
+    //     polimorfan kulcs-alapú DFS-szel mennek (bridge nélkül).
+    for (var j = 0; j < lineObjs.length; j++) {
+      var lineObj = lineObjs[j];
+      var lineNum = navXmlText(lineObj, 'lineNumber');
       var compKey = invNum + '||' + lineNum;
       if (compositeKeys[compKey]) continue;
       var row = dpBuildRow(hMapTet, totTetCols, cfg.tetelMap, [invNum, lineObj, headObj, rootObj]);
@@ -392,25 +417,26 @@ function osaProcessInvoiceDataBatch(resultsArray, direction) {
       compositeKeys[compKey] = true;
     }
 
-    // 3b. Fejléc frissítés
+    // 3b. Fejléc frissítés — headObj és rootObj is plain JS, a fejlecInvoicedataMap
+    //     navFindAll/navXmlText hívásai polimorfan működnek.
     if (rowIdx !== undefined) {
       var currentRow = fejData[rowIdx];
       var dlVal = String(currentRow[fejDl - 1]).trim();
       if (dlVal === '' || dlVal === 'n/a') {
-        for (var colName in cfg.fejlecMap) {
+        var fldNames = Object.keys(cfg.fejlecInvoicedataMap);
+        for (var fi = 0; fi < fldNames.length; fi++) {
+          var colName = fldNames[fi];
           var colIdx = hMapFej[colName];
           if (!colIdx) continue;
           var existingVal = String(currentRow[colIdx - 1]).trim();
-          if (existingVal === '' || existingVal === 'n/a') {
-            var mappedVal = cfg.fejlecMap[colName]({
-              invoiceNumber: invNum,
-              invoiceXml: res.invoiceXml,
-              rootEl: rootObj,
-              headEl: headObj
-            });
-            if (mappedVal !== undefined && mappedVal !== null && mappedVal !== '') {
-              currentRow[colIdx - 1] = mappedVal;
+          if (existingVal !== '' && existingVal !== 'n/a') continue;
+          try {
+            var newVal = cfg.fejlecInvoicedataMap[colName](headObj, rootObj);
+            if (newVal !== '' && newVal != null) {
+              currentRow[colIdx - 1] = newVal;
             }
+          } catch(e) {
+            Logger.log(tag + ' fejléc [' + colName + ']: ' + e.message);
           }
         }
         currentRow[fejDl - 1] = now;
@@ -453,5 +479,13 @@ function osaProcessInvoiceDataBatch(resultsArray, direction) {
 
   Logger.log(tag + ' KÉSZ: ' + newTetelRows.length + ' tétel, ' + modifiedFejRows.length +
     ' fejléc frissítve, ' + markedNA + ' n/a. Összes idő: ' + (Date.now() - t0) + 'ms');
-  return newTetelRows.length;
+
+  return {
+    fejSh: fejSh, tetSh: tetSh,
+    hMapTet: hMapTet, totTetCols: totTetCols, tetKey1: tetKey1, tetKey2: tetKey2,
+    hMapFej: hMapFej, totFejCols: totFejCols, fejKey: fejKey, fejDl: fejDl,
+    compositeKeys: compositeKeys,
+    fejData: fejData,
+    fejIndexMap: fejIndexMap
+  };
 }
